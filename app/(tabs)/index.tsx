@@ -23,58 +23,80 @@ export default function ScannerScreen() {
   const [bluetoothState, setBluetoothState] = useState<State>(State.Unknown);
   
   const bleManagerRef = useRef<BleManager | null>(null);
-  const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitializedRef = useRef(false);
   const subscriptionRef = useRef<any>(null);
+  const isMountedRef = useRef(true);
 
-  // Inicialização segura do BleManager
+  // Inicialização do BleManager
   const initializeBleManager = useCallback(async () => {
-    if (isInitializedRef.current || bleManagerRef.current) {
-      return;
+    if (isInitializedRef.current && bleManagerRef.current) {
+      return true;
     }
 
     try {
       console.log('Inicializando BleManager...');
+      
+      // Limpar instância anterior se existir
+      if (bleManagerRef.current) {
+        try {
+          bleManagerRef.current.destroy();
+        } catch (error) {
+          console.log('Erro ao destruir instância anterior:', error);
+        }
+      }
+
       bleManagerRef.current = new BleManager();
-      isInitializedRef.current = true;
+      
+      // Aguardar um pouco para garantir que o manager está pronto
+      await new Promise(resolve => setTimeout(resolve, 100));
       
       // Verificar estado do Bluetooth
       const state = await bleManagerRef.current.state();
-      setBluetoothState(state);
+      console.log('Estado inicial do Bluetooth:', state);
+      
+      if (isMountedRef.current) {
+        setBluetoothState(state);
+      }
       
       // Monitorar mudanças no estado do Bluetooth
-      subscriptionRef.current = bleManagerRef.current.onStateChange((state) => {
-        console.log('Estado do Bluetooth mudou para:', state);
-        setBluetoothState(state);
-        
-        if (state !== 'PoweredOn' && isScanning) {
-          stopScanning();
+      if (subscriptionRef.current) {
+        subscriptionRef.current.remove();
+      }
+      
+      subscriptionRef.current = bleManagerRef.current.onStateChange((newState) => {
+        console.log('Estado do Bluetooth mudou para:', newState);
+        if (isMountedRef.current) {
+          setBluetoothState(newState);
+          
+          if (newState !== 'PoweredOn' && isScanning) {
+            console.log('Bluetooth desligado, parando scan...');
+            stopScanning();
+          }
         }
       }, true);
       
+      isInitializedRef.current = true;
       console.log('BleManager inicializado com sucesso');
+      return true;
+      
     } catch (error) {
       console.error('Erro ao inicializar BleManager:', error);
       isInitializedRef.current = false;
       bleManagerRef.current = null;
+      return false;
     }
-  }, [isScanning]);
+  }, []);
 
   // Cleanup do BleManager
   const cleanupBleManager = useCallback(() => {
     console.log('Fazendo cleanup do BleManager...');
-    
-    if (scanTimeoutRef.current) {
-      clearTimeout(scanTimeoutRef.current);
-      scanTimeoutRef.current = null;
-    }
     
     if (subscriptionRef.current) {
       subscriptionRef.current.remove();
       subscriptionRef.current = null;
     }
     
-    if (bleManagerRef.current && isInitializedRef.current) {
+    if (bleManagerRef.current) {
       try {
         if (isScanning) {
           bleManagerRef.current.stopDeviceScan();
@@ -87,27 +109,24 @@ export default function ScannerScreen() {
     
     bleManagerRef.current = null;
     isInitializedRef.current = false;
-    setIsScanning(false);
+    
+    if (isMountedRef.current) {
+      setIsScanning(false);
+    }
   }, [isScanning]);
 
   // Hook para gerenciar foco da tela
   useFocusEffect(
     useCallback(() => {
+      console.log('Tela ganhou foco');
       initializeBleManager();
       
       return () => {
-        // Não fazer cleanup completo quando a tela perde foco
-        // apenas parar o scan se estiver ativo
-        if (isScanning && bleManagerRef.current) {
-          try {
-            bleManagerRef.current.stopDeviceScan();
-            setIsScanning(false);
-          } catch (error) {
-            console.error('Erro ao parar scan no unfocus:', error);
-          }
-        }
+        console.log('Tela perdeu foco');
+        // Manter o scan ativo mesmo quando a tela perde foco
+        // Apenas log para debug
       };
-    }, [initializeBleManager, isScanning])
+    }, [initializeBleManager])
   );
 
   // Monitorar estado do app
@@ -115,9 +134,12 @@ export default function ScannerScreen() {
     const handleAppStateChange = (nextAppState: string) => {
       console.log('AppState mudou para:', nextAppState);
       
-      if (nextAppState === 'background' || nextAppState === 'inactive') {
-        if (isScanning) {
-          stopScanning();
+      // Remover a parada automática do scan quando o app vai para background
+      // O scan pode continuar em background se as permissões permitirem
+      if (nextAppState === 'active') {
+        // Quando o app volta ao foreground, verificar se precisa reinicializar
+        if (!isInitializedRef.current) {
+          initializeBleManager();
         }
       }
     };
@@ -127,11 +149,14 @@ export default function ScannerScreen() {
     return () => {
       subscription?.remove();
     };
-  }, [isScanning]);
+  }, [initializeBleManager]);
 
   // Cleanup final
   useEffect(() => {
+    isMountedRef.current = true;
+    
     return () => {
+      isMountedRef.current = false;
       cleanupBleManager();
     };
   }, [cleanupBleManager]);
@@ -157,7 +182,7 @@ export default function ScannerScreen() {
       try {
         const settings = await getSettings();
         if (settings.vibrationEnabled) {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
       } catch (error) {
         console.error('Erro no feedback háptico:', error);
@@ -166,6 +191,8 @@ export default function ScannerScreen() {
   };
 
   const handleDeviceDetected = async (device: Device) => {
+    if (!isMountedRef.current) return;
+    
     if (!device.name && !device.localName) return;
     
     // Verificar se é um beacon conhecido pelo MAC address
@@ -175,7 +202,7 @@ export default function ScannerScreen() {
     ];
     
     const deviceInfo = `${device.name || device.localName} (${device.id})`;
-    console.log('Dispositivo detectado:', deviceInfo);
+    console.log('Dispositivo detectado:', deviceInfo, 'RSSI:', device.rssi);
     
     if (knownBeaconMACs.includes(device.id.toUpperCase())) {
       // Evitar notificações repetidas do mesmo dispositivo
@@ -201,34 +228,36 @@ export default function ScannerScreen() {
         
         // Limpar a notificação após 10 segundos para permitir nova detecção
         setTimeout(() => {
-          if (lastNotifiedDevice === device.id) {
+          if (lastNotifiedDevice === device.id && isMountedRef.current) {
             setLastNotifiedDevice('');
           }
         }, 10000);
       }
     }
     
-    setNearbyDevices(prev => {
-      const exists = prev.find(d => d.id === device.id);
-      if (!exists) {
-        return [...prev.slice(-9), device]; // Manter apenas os 10 mais recentes
-      }
-      return prev;
-    });
+    // Atualizar lista de dispositivos próximos
+    if (isMountedRef.current) {
+      setNearbyDevices(prev => {
+        const exists = prev.find(d => d.id === device.id);
+        if (!exists) {
+          return [...prev.slice(-9), device]; // Manter apenas os 10 mais recentes
+        }
+        return prev;
+      });
+    }
   };
 
   const startScanning = async () => {
-    if (!bleManagerRef.current || !isInitializedRef.current) {
-      console.log('BleManager não inicializado, tentando inicializar...');
-      await initializeBleManager();
-      
-      if (!bleManagerRef.current) {
-        Alert.alert('Erro', 'Não foi possível inicializar o Bluetooth.');
-        return;
-      }
-    }
+    console.log('Tentando iniciar scanning...');
     
+    // Verificar se já está escaneando
+    if (isScanning) {
+      console.log('Já está escaneando');
+      return;
+    }
+
     try {
+      // Verificar permissões
       const hasPermissions = await requestPermissions();
       if (!hasPermissions) {
         Alert.alert(
@@ -238,7 +267,17 @@ export default function ScannerScreen() {
         return;
       }
       
+      // Inicializar BleManager se necessário
+      const initialized = await initializeBleManager();
+      if (!initialized || !bleManagerRef.current) {
+        Alert.alert('Erro', 'Não foi possível inicializar o Bluetooth.');
+        return;
+      }
+      
+      // Verificar estado do Bluetooth
       const state = await bleManagerRef.current.state();
+      console.log('Estado do Bluetooth antes do scan:', state);
+      
       if (state !== 'PoweredOn') {
         Alert.alert(
           'Bluetooth Desabilitado',
@@ -247,53 +286,89 @@ export default function ScannerScreen() {
         return;
       }
       
-      setIsScanning(true);
+      // Limpar dados anteriores
       setNearbyDevices([]);
+      setLastNotifiedDevice('');
       
+      // Feedback para o usuário
       await triggerHapticFeedback();
       await speakMessage('Iniciando escaneamento de beacons. Caminhe com segurança.');
       
-      console.log('Iniciando scan...');
+      // Definir estado como escaneando ANTES de iniciar o scan
+      setIsScanning(true);
       
-      bleManagerRef.current.startDeviceScan(null, null, (error, device) => {
-        if (error) {
-          console.error('Erro no escaneamento:', error);
-          setIsScanning(false);
-          return;
+      console.log('Iniciando scan BLE...');
+      
+      // Iniciar o scan com configurações otimizadas
+      bleManagerRef.current.startDeviceScan(
+        null, // UUIDs de serviços (null para todos)
+        {
+          allowDuplicates: true, // Permitir duplicatas para detectar movimento
+          scanMode: 1, // Modo de scan balanceado
+          callbackType: 1, // Callback para todos os matches
+        },
+        (error, device) => {
+          if (error) {
+            console.error('Erro no callback do scan:', error);
+            
+            // Se houve erro, parar o scanning
+            if (isMountedRef.current) {
+              setIsScanning(false);
+              Alert.alert('Erro no Escaneamento', error.message || 'Erro desconhecido');
+            }
+            return;
+          }
+          
+          if (device && isMountedRef.current) {
+            handleDeviceDetected(device);
+          }
         }
-        
-        if (device) {
-          handleDeviceDetected(device);
-        }
-      });
+      );
+      
+      console.log('Scan iniciado com sucesso');
       
     } catch (error) {
       console.error('Erro ao iniciar escaneamento:', error);
-      setIsScanning(false);
-      Alert.alert('Erro', 'Não foi possível iniciar o escaneamento.');
+      
+      if (isMountedRef.current) {
+        setIsScanning(false);
+        const errorMessage = typeof error === 'object' && error !== null && 'message' in error
+          ? (error as { message?: string }).message
+          : String(error);
+        Alert.alert('Erro', `Não foi possível iniciar o escaneamento: ${errorMessage}`);
+      }
     }
   };
 
-  const stopScanning = async () => {
-    if (!bleManagerRef.current || !isInitializedRef.current) {
-      setIsScanning(false);
+  const stopScanning = useCallback(async () => {
+    console.log('Parando scanning...');
+    
+    if (!isScanning) {
+      console.log('Não está escaneando');
       return;
     }
-    
+
     try {
-      console.log('Parando scan...');
-      bleManagerRef.current.stopDeviceScan();
-      setIsScanning(false);
-      setLastNotifiedDevice('');
+      if (bleManagerRef.current && isInitializedRef.current) {
+        bleManagerRef.current.stopDeviceScan();
+        console.log('Scan parado');
+      }
       
-      await triggerHapticFeedback();
-      await speakMessage('Escaneamento interrompido.');
+      if (isMountedRef.current) {
+        setIsScanning(false);
+        setLastNotifiedDevice('');
+        
+        await triggerHapticFeedback();
+        await speakMessage('Escaneamento interrompido.');
+      }
       
     } catch (error) {
       console.error('Erro ao parar escaneamento:', error);
-      setIsScanning(false);
+      if (isMountedRef.current) {
+        setIsScanning(false);
+      }
     }
-  };
+  }, [isScanning]);
 
   const toggleScanning = () => {
     if (isScanning) {
@@ -349,7 +424,7 @@ export default function ScannerScreen() {
         {bluetoothState !== 'PoweredOn' && (
           <View style={styles.warningContainer}>
             <Text style={styles.warningText}>
-              ⚠️ Bluetooth desabilitado ou indisponível
+              Bluetooth desabilitado ou indisponível
             </Text>
             <Text style={styles.warningSubtext}>
               Estado atual: {bluetoothState}
