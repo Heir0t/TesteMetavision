@@ -197,8 +197,7 @@ export default function ScannerScreen() {
     
     // Verificar se é um beacon conhecido pelo MAC address
     const knownBeaconMACs = [
-      '00:11:22:33:44:55', // Exemplo de MAC do beacon
-      'AA:BB:CC:DD:EE:FF', // Outro exemplo
+      'DA:A7:D3:B1:84:8F'
     ];
     
     const deviceInfo = `${device.name || device.localName} (${device.id})`;
