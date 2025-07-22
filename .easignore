@@ -1,0 +1,8 @@
+# Ignorar pastas do sistema
+AppData/
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+node_modules/
