@@ -104,7 +104,7 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>🔊 Configurações de Voz</Text>
+        <Text style={styles.sectionTitle}> Configurações de Voz</Text>
         
         <View style={styles.settingItem}>
           <Text style={styles.settingLabel}>Velocidade da Fala</Text>
