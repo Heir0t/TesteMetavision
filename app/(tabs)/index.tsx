@@ -238,127 +238,47 @@ export default function ScannerScreen() {
     };
   };
   const startScanning = async () => {
-    console.log('Tentando iniciar scanning...');
+    console.log('Iniciando escaneamento...');
 
-    // Verificar se já está escaneando
-    if (isScanning) {
-      console.log('Já está escaneando');
-      return;
-    }
+    if (isScanning) return;
 
-    try {
-      // Verificar permissões
-      const hasPermissions = await requestPermissions();
-      if (!hasPermissions) {
-        Alert.alert(
-          'Permissões Necessárias',
-          'Este aplicativo precisa de permissão de localização para funcionar corretamente.',
-        );
-        return;
-      }
+    setIsScanning(true);
+    setNearbyDevices([]);
+    setLastNotifiedDevice('');
 
-      // Inicializar BleManager se necessário
-      const initialized = await initializeBleManager();
-      if (!initialized || !bleManagerRef.current) {
-        Alert.alert('Erro', 'Não foi possível inicializar o Bluetooth.');
-        return;
-      }
+    await triggerHapticFeedback();
+    await speakMessage('Iniciando escaneamento de beacons. Caminhe com segurança.');
 
-      // Verificar estado do Bluetooth
-      const state = await bleManagerRef.current.state();
-      console.log('Estado do Bluetooth antes do scan:', state);
+    // Simula 5 segundos de "escaneamento"
+    setTimeout(async () => {
+      if (!isMountedRef.current) return;
 
-      if (state !== 'PoweredOn') {
-        Alert.alert(
-          'Bluetooth Desabilitado',
-          'Por favor, habilite o Bluetooth para usar este aplicativo.',
-        );
-        return;
-      }
+      // Finge que achou um beacon
+      const fakeDevice = { id: 'FAKE-123', name: 'Beacon Simulado' } as Device;
 
-      // Limpar dados anteriores
-      setNearbyDevices([]);
-      setLastNotifiedDevice('');
+      setNearbyDevices([fakeDevice]);
 
-      // Feedback para o usuário
       await triggerHapticFeedback();
-      await speakMessage('Iniciando escaneamento de beacons. Caminhe com segurança.');
+      await speakMessage('Travessia a 5 metros à frente');
 
-      // Definir estado como escaneando ANTES de iniciar o scan
-      setIsScanning(true);
+      setLastNotifiedDevice(fakeDevice.id);
 
-      console.log('Iniciando scan BLE...');
-
-      // Iniciar o scan com configurações otimizadas
-      bleManagerRef.current.startDeviceScan(
-        null, // UUIDs de serviços (null para todos)
-        {
-          allowDuplicates: true, // Permitir duplicatas para detectar movimento
-          scanMode: 1, // Modo de scan balanceado
-          callbackType: 1, // Callback para todos os matches
-        },
-        (error, device) => {
-          if (error) {
-            console.error('Erro no callback do scan:', error);
-
-            // Se houve erro, parar o scanning
-            if (isMountedRef.current) {
-              setIsScanning(false);
-              Alert.alert('Erro no Escaneamento', error.message || 'Erro desconhecido');
-            }
-            return;
-          }
-
-          if (device && isMountedRef.current) {
-            handleDeviceDetected(device);
-          }
-        }
-      );
-
-      console.log('Scan iniciado com sucesso');
-
-    } catch (error) {
-      console.error('Erro ao iniciar escaneamento:', error);
-
-      if (isMountedRef.current) {
-        setIsScanning(false);
-        const errorMessage = typeof error === 'object' && error !== null && 'message' in error
-          ? (error as { message?: string }).message
-          : String(error);
-        Alert.alert('Erro', `Não foi possível iniciar o escaneamento: ${errorMessage}`);
-      }
-    }
+      console.log('Beacon encontrado!');
+    }, 5000);
   };
 
   const stopScanning = useCallback(async () => {
-    console.log('Parando scanning...');
+  console.log('Parando escaneamento...');
 
-    if (!isScanning) {
-      console.log('Não está escaneando');
-      return;
-    }
+  if (!isScanning) return;
 
-    try {
-      if (bleManagerRef.current && isInitializedRef.current) {
-        bleManagerRef.current.stopDeviceScan();
-        console.log('Scan parado');
-      }
+  setIsScanning(false);
+  setLastNotifiedDevice('');
+  setNearbyDevices([]);
 
-      if (isMountedRef.current) {
-        setIsScanning(false);
-        setLastNotifiedDevice('');
-
-        await triggerHapticFeedback();
-        await speakMessage('Escaneamento interrompido.');
-      }
-
-    } catch (error) {
-      console.error('Erro ao parar escaneamento:', error);
-      if (isMountedRef.current) {
-        setIsScanning(false);
-      }
-    }
-  }, [isScanning]);
+  await triggerHapticFeedback();
+  await speakMessage('Escaneamento interrompido.');
+}, [isScanning]);
 
   const toggleScanning = () => {
     if (isScanning) {

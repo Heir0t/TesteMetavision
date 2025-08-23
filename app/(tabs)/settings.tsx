@@ -104,7 +104,7 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}> Configurações de Voz</Text>
+        <Text style={styles.sectionTitle}>Configurações de Voz</Text>
         
         <View style={styles.settingItem}>
           <Text style={styles.settingLabel}>Velocidade da Fala</Text>
@@ -153,7 +153,7 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>📳 Feedback Tátil</Text>
+        <Text style={styles.sectionTitle}>Feedback Tátil</Text>
         
         <View style={styles.switchContainer}>
           <View style={styles.switchInfo}>
@@ -175,7 +175,7 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>ℹ️ Informações</Text>
+        <Text style={styles.sectionTitle}>Informações</Text>
         
         <View style={styles.infoContainer}>
           <Text style={styles.infoText}>
@@ -306,14 +306,13 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   resetButton: {
-    backgroundColor: '#FF3B30',
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
     marginTop: 20,
   },
   resetButtonText: {
-    color: '#ffffff',
+    color: '#ff0000ff',
     fontSize: 16,
     fontWeight: '600',
   },
