@@ -193,92 +193,145 @@ export default function ScannerScreen() {
   const handleDeviceDetected = async (device: Device) => {
     if (!isMountedRef.current) return;
 
-    if (!device.name && !device.localName) return;
+    // Verificar nome do dispositivo (tanto name quanto localName)
+    const deviceName = device.name || device.localName;
+    if (!deviceName) return;
 
-    // Verificar se é um beacon conhecido pelo MAC address
+    // Mapa de beacons conhecidos pelo nome
     const knownBeaconsMap: Record<string, string> = {
-      'DA:A7:D3:B1:84:8F': 'Atenção: escada detectada à frente.',
-      'FA:53:DB:B5:F1:97': 'Banco disponível à frente.',
-      'D4:68:B2:17:F2:58': 'Spotfy, seu aplicativo de musica'
-      // Adicione mais MACs e mensagens aqui
+      'Beacon-1': 'Você está no estande do Metavision',
+      // Adicione mais nomes e mensagens aqui conforme necessário
+      'Beacon-Escada': 'Atenção: escada detectada à frente.',
+      'Beacon-Banco': 'Banco disponível à frente.',
+      'Beacon-Spotify': 'Spotify, seu aplicativo de música'
     };
 
-    const handleDeviceDetected = async (device: Device) => {
-      if (!isMountedRef.current) return;
+    const message = knownBeaconsMap[deviceName];
 
-      const mac = device.id.toUpperCase();
-      const obstacleMessage = knownBeaconsMap[mac];
+    if (!message) return; // Ignora dispositivos que não estão no mapa
 
-      if (!obstacleMessage) return; // Ignora dispositivos que não estão no mapa
+    console.log('Beacon conhecido detectado:', deviceName, 'RSSI:', device.rssi);
+    console.log('UUID do dispositivo:', device.serviceUUIDs);
 
-      console.log('Dispositivo conhecido detectado:', mac, 'RSSI:', device.rssi);
+    // Verificar se é o Beacon-1 específico com UUID correto
+    if (deviceName === 'Beacon-1') {
+      const expectedUUID = '10000000-0000-0000-0000-000000000000';
+      const deviceUUIDs = device.serviceUUIDs || [];
+      
+      // Verificar se o UUID esperado está presente
+      const hasCorrectUUID = deviceUUIDs.some(uuid => 
+        uuid.toLowerCase() === expectedUUID.toLowerCase()
+      );
 
-      if (lastNotifiedDevice !== mac) {
-        setLastNotifiedDevice(mac);
-
-        await triggerHapticFeedback();
-        await speakMessage(obstacleMessage);
-
-        // Limpa a notificação após 10 segundos
-        setTimeout(() => {
-          if (lastNotifiedDevice === mac && isMountedRef.current) {
-            setLastNotifiedDevice('');
-          }
-        }, 10000);
+      if (hasCorrectUUID) {
+        console.log('UUID verificado com sucesso para Beacon-1');
+      } else {
+        console.log('UUID não confere para Beacon-1, ignorando...');
+        console.log('UUIDs encontrados:', deviceUUIDs);
+        return;
       }
+    }
 
-      // Atualiza lista de dispositivos próximos
-      setNearbyDevices(prev => {
-        const exists = prev.find(d => d.id === device.id);
-        if (!exists) {
-          return [...prev.slice(-9), device]; // mantém só os 10 mais recentes
+    // Evitar notificações repetidas
+    const deviceIdentifier = deviceName;
+    if (lastNotifiedDevice !== deviceIdentifier) {
+      setLastNotifiedDevice(deviceIdentifier);
+
+      await triggerHapticFeedback();
+      await speakMessage(message);
+
+      // Limpa a notificação após 10 segundos para permitir nova detecção
+      setTimeout(() => {
+        if (lastNotifiedDevice === deviceIdentifier && isMountedRef.current) {
+          setLastNotifiedDevice('');
         }
-        return prev;
-      });
-    };
+      }, 10000);
+    }
+
+    // Atualiza lista de dispositivos próximos
+    setNearbyDevices(prev => {
+      const exists = prev.find(d => d.id === device.id);
+      if (!exists) {
+        return [...prev.slice(-9), device]; // mantém só os 10 mais recentes
+      }
+      return prev;
+    });
   };
+
   const startScanning = async () => {
     console.log('Iniciando escaneamento...');
 
     if (isScanning) return;
 
-    setIsScanning(true);
-    setNearbyDevices([]);
-    setLastNotifiedDevice('');
+    try {
+      const hasPermissions = await requestPermissions();
+      if (!hasPermissions) {
+        Alert.alert('Erro', 'Permissões de Bluetooth são necessárias');
+        return;
+      }
 
-    await triggerHapticFeedback();
-    await speakMessage('Iniciando escaneamento de beacons. Caminhe com segurança.');
+      if (bluetoothState !== 'PoweredOn') {
+        Alert.alert('Erro', 'Bluetooth precisa estar ligado');
+        return;
+      }
 
-    // Simula 5 segundos de "escaneamento"
-    setTimeout(async () => {
-      if (!isMountedRef.current) return;
+      if (!bleManagerRef.current) {
+        const initialized = await initializeBleManager();
+        if (!initialized) {
+          Alert.alert('Erro', 'Não foi possível inicializar o Bluetooth');
+          return;
+        }
+      }
 
-      // Finge que achou um beacon
-      const fakeDevice = { id: 'FAKE-123', name: 'Beacon Simulado' } as Device;
-
-      setNearbyDevices([fakeDevice]);
+      setIsScanning(true);
+      setNearbyDevices([]);
+      setLastNotifiedDevice('');
 
       await triggerHapticFeedback();
-      await speakMessage('Travessia a 5 metros à frente');
+      await speakMessage('Iniciando escaneamento de beacons. Caminhe com segurança.');
 
-      setLastNotifiedDevice(fakeDevice.id);
+      // Iniciar escaneamento real
+      bleManagerRef.current!.startDeviceScan(null, null, (error, device) => {
+        if (error) {
+          console.error('Erro no scan:', error);
+          if (isMountedRef.current) {
+            setIsScanning(false);
+          }
+          return;
+        }
 
-      console.log('Beacon encontrado!');
-    }, 5000);
+        if (device) {
+          handleDeviceDetected(device);
+        }
+      });
+
+    } catch (error) {
+      console.error('Erro ao iniciar escaneamento:', error);
+      setIsScanning(false);
+      Alert.alert('Erro', 'Não foi possível iniciar o escaneamento');
+    }
   };
 
   const stopScanning = useCallback(async () => {
-  console.log('Parando escaneamento...');
+    console.log('Parando escaneamento...');
 
-  if (!isScanning) return;
+    if (!isScanning) return;
 
-  setIsScanning(false);
-  setLastNotifiedDevice('');
-  setNearbyDevices([]);
+    try {
+      if (bleManagerRef.current) {
+        bleManagerRef.current.stopDeviceScan();
+      }
+    } catch (error) {
+      console.error('Erro ao parar scan:', error);
+    }
 
-  await triggerHapticFeedback();
-  await speakMessage('Escaneamento interrompido.');
-}, [isScanning]);
+    setIsScanning(false);
+    setLastNotifiedDevice('');
+    setNearbyDevices([]);
+
+    await triggerHapticFeedback();
+    await speakMessage('Escaneamento interrompido.');
+  }, [isScanning]);
 
   const toggleScanning = () => {
     if (isScanning) {
@@ -294,7 +347,7 @@ export default function ScannerScreen() {
         <Text style={styles.welcomeText}>Bem-vindo!</Text>
         <Text style={styles.instructionText}>
           {isScanning
-            ? 'Escaneamento ativo. Caminhe com segurança.'
+            ? 'Escaneamento ativo. Procurando por Beacon-1...'
             : bluetoothState === 'PoweredOn'
               ? 'Clique no botão para iniciar o escaneamento'
               : `Bluetooth: ${bluetoothState}`}
@@ -323,7 +376,7 @@ export default function ScannerScreen() {
         {isScanning && (
           <View style={styles.statusContainer}>
             <Text style={styles.statusText}>
-              🔍 Escaneando dispositivos próximos...
+              🔍 Procurando por Beacon-1...
             </Text>
             <Text style={styles.deviceCount}>
               {nearbyDevices.length} dispositivo(s) encontrado(s)
@@ -346,6 +399,9 @@ export default function ScannerScreen() {
       <View style={styles.footer}>
         <Text style={styles.footerText}>
           Mantenha o aplicativo aberto durante o uso
+        </Text>
+        <Text style={styles.footerSubtext}>
+          Procurando por: Beacon-1 (UUID: 10000000-0000-0000-0000-000000000000)
         </Text>
       </View>
     </View>
@@ -454,6 +510,13 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: 14,
     color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    marginBottom: 5,
+  },
+  footerSubtext: {
+    fontSize: 12,
+    color: '#888',
     textAlign: 'center',
     fontStyle: 'italic',
   },
