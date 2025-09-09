@@ -17,18 +17,6 @@ import { requestPermissions as requestPermissionsFromService } from '@/services/
 import { getSettings } from '@/services/settings';
 import { useFocusEffect } from '@react-navigation/native';
 
-// ---------- NOTE
-// This file is a revised version of your ScannerScreen component.
-// Main fixes applied (see comments below and summary in the chat):
-// - Use refs to avoid stale closures for isScanning and lastNotifiedDevice
-// - Don't `await` startDeviceScan (it's not async) — handle errors inside the callback
-// - Compare Bluetooth state using State.PoweredOn instead of string literals
-// - Better cleanup and defensive checks before calling BLE methods
-// - Clear lastNotified device using a functional updater
-// - Improve logging and show alerts on scan errors
-// - Keep permission checks outside and provide example `services/permissions` elsewhere
-// ----------
-
 export default function ScannerScreen() {
   const [isScanning, setIsScanning] = useState(false);
   const [nearbyDevices, setNearbyDevices] = useState<Device[]>([]);
@@ -237,8 +225,8 @@ export default function ScannerScreen() {
     console.log('Beacon conhecido detectado:', deviceName, 'RSSI:', device.rssi);
 
     // Se for Beacon-1, checar UUID
-    if (deviceName === 'Beacon-1') {
-      const expectedUUID = '10000000-0000-0000-0000-000000000000';
+    if (deviceName == 'Beacon-1') {
+      const expectedUUID = '12345678912345678912345678912345';
       const deviceUUIDs = device.serviceUUIDs || [];
       const hasCorrectUUID = deviceUUIDs.some(uuid => uuid.toLowerCase() === expectedUUID.toLowerCase());
       if (!hasCorrectUUID) {
@@ -398,7 +386,7 @@ export default function ScannerScreen() {
 
         {isScanning && (
           <View style={styles.statusContainer}>
-            <Text style={styles.statusText}>🔍 Procurando por Beacon-1...</Text>
+            <Text style={styles.statusText}>Procurando...</Text>
             <Text style={styles.deviceCount}>{nearbyDevices.length} dispositivo(s) encontrado(s)</Text>
           </View>
         )}
@@ -413,7 +401,9 @@ export default function ScannerScreen() {
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>Mantenha o aplicativo aberto durante o uso</Text>
-        <Text style={styles.footerSubtext}>Procurando por: Beacon-1 (UUID: 10000000-0000-0000-0000-000000000000)</Text>
+
+
+
       </View>
     </View>
   );
