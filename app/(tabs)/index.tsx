@@ -7,20 +7,19 @@ import {
   Alert,
   Platform,
   AppState,
-  PermissionsAndroid,
 } from 'react-native';
 import { BleManager, Device, State } from 'react-native-ble-plx';
 import * as Speech from 'expo-speech';
 import * as Haptics from 'expo-haptics';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { requestPermissions as requestPermissionsFromService } from '@/services/permissions';
 import { getSettings } from '@/services/settings';
 import { useFocusEffect } from '@react-navigation/native';
 
+const NOTIFICATION_COOLDOWN = 10000; // 10 segundos
+
 export default function ScannerScreen() {
   const [isScanning, setIsScanning] = useState(false);
   const [nearbyDevices, setNearbyDevices] = useState<Device[]>([]);
-  const [lastNotifiedDevice, setLastNotifiedDevice] = useState<string>('');
   const [bluetoothState, setBluetoothState] = useState<State>(State.Unknown as State);
 
   const bleManagerRef = useRef<BleManager | null>(null);
@@ -28,17 +27,12 @@ export default function ScannerScreen() {
   const subscriptionRef = useRef<any>(null);
   const isMountedRef = useRef(true);
 
-  // Refs to avoid stale closures inside callbacks
+  const lastNotificationTimestamps = useRef<Record<string, number>>({});
   const isScanningRef = useRef(false);
-  const lastNotifiedRef = useRef('');
 
   useEffect(() => {
     isScanningRef.current = isScanning;
   }, [isScanning]);
-
-  useEffect(() => {
-    lastNotifiedRef.current = lastNotifiedDevice;
-  }, [lastNotifiedDevice]);
 
   const initializeBleManager = useCallback(async () => {
     if (isInitializedRef.current && bleManagerRef.current) {
@@ -47,7 +41,6 @@ export default function ScannerScreen() {
 
     try {
       console.log('Inicializando BleManager...');
-
       if (bleManagerRef.current) {
         try {
           bleManagerRef.current.destroy();
@@ -55,38 +48,14 @@ export default function ScannerScreen() {
           console.log('Erro ao destruir instância anterior:', error);
         }
       }
-
       bleManagerRef.current = new BleManager();
-
-      // Aguardar um pouco para garantir que o manager está pronto
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      const state = await bleManagerRef.current.state();
-      console.log('Estado inicial do Bluetooth:', state);
-
-      if (isMountedRef.current) {
-        setBluetoothState(state as State);
-      }
-
-      // remover subscrição anterior (se houver)
-      if (subscriptionRef.current) {
-        try {
-          subscriptionRef.current.remove();
-        } catch (e) {
-          console.log('Erro ao remover subscrição antiga:', e);
-        }
-        subscriptionRef.current = null;
-      }
-
-      // Monitorar mudanças no estado do Bluetooth
+      
       subscriptionRef.current = bleManagerRef.current.onStateChange((newState: State) => {
         console.log('Estado do Bluetooth mudou para:', newState);
         if (isMountedRef.current) {
           setBluetoothState(newState);
-
-          // Se bluetooth deixou de estar ligado, pare imediatamente o scan localmente
           if (newState !== State.PoweredOn) {
-            console.log('Bluetooth não está PoweredOn: limpando scan/estado local...');
+            console.log('Bluetooth não está PoweredOn: parando scan...');
             try {
               if (bleManagerRef.current && isScanningRef.current) {
                 bleManagerRef.current.stopDeviceScan();
@@ -94,10 +63,8 @@ export default function ScannerScreen() {
             } catch (err) {
               console.log('Erro ao parar scan quando bluetooth mudou:', err);
             }
-
             if (isMountedRef.current) {
               setIsScanning(false);
-              setLastNotifiedDevice('');
               setNearbyDevices([]);
             }
           }
@@ -118,12 +85,10 @@ export default function ScannerScreen() {
 
   const cleanupBleManager = useCallback(() => {
     console.log('Fazendo cleanup do BleManager...');
-
     if (subscriptionRef.current) {
       try { subscriptionRef.current.remove(); } catch(e){ console.log('Erro removendo subscrição:', e); }
       subscriptionRef.current = null;
     }
-
     if (bleManagerRef.current) {
       try {
         if (isScanningRef.current) {
@@ -134,10 +99,8 @@ export default function ScannerScreen() {
         console.error('Erro durante cleanup:', error);
       }
     }
-
     bleManagerRef.current = null;
     isInitializedRef.current = false;
-
     if (isMountedRef.current) {
       setIsScanning(false);
     }
@@ -147,31 +110,25 @@ export default function ScannerScreen() {
     useCallback(() => {
       console.log('Tela ganhou foco');
       initializeBleManager();
-
       return () => {
         console.log('Tela perdeu foco (não paramos scan automaticamente)');
       };
     }, [initializeBleManager])
   );
-
+  
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
       console.log('AppState mudou para:', nextAppState);
-
-      if (nextAppState === 'active') {
-        if (!isInitializedRef.current) {
-          initializeBleManager();
-        }
+      if (nextAppState === 'active' && !isInitializedRef.current) {
+        initializeBleManager();
       }
     };
-
     const subscription = AppState.addEventListener('change', handleAppStateChange);
-
     return () => {
       subscription?.remove();
     };
   }, [initializeBleManager]);
-
+  
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -183,35 +140,34 @@ export default function ScannerScreen() {
   const speakMessage = async (message: string) => {
     try {
       const settings = await getSettings();
-      const speechOptions = {
+      Speech.speak(message, {
         language: 'pt-BR',
         pitch: settings.speechPitch,
         rate: settings.speechRate,
-      };
-      Speech.speak(message, speechOptions);
+      });
     } catch (error) {
       console.error('Erro ao reproduzir fala:', error);
     }
   };
 
   const triggerHapticFeedback = async () => {
-    if (Platform.OS !== 'web') {
-      try {
-        const settings = await getSettings();
-        if (settings.vibrationEnabled) {
-          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        }
-      } catch (error) {
-        console.error('Erro no feedback háptico:', error);
+    if (Platform.OS === 'web') return;
+    try {
+      const settings = await getSettings();
+      if (settings.vibrationEnabled) {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       }
+    } catch (error) {
+      console.error('Erro no feedback háptico:', error);
     }
   };
 
   const handleDeviceDetected = async (device: Device) => {
     if (!isMountedRef.current) return;
+    
     const deviceName = device.name || device.localName;
     if (!deviceName) return;
-
+    
     const knownBeaconsMap: Record<string, string> = {
       'Beacon-1': 'Você está no estande do Metavision',
       'Beacon-Escada': 'Atenção: escada detectada à frente.',
@@ -222,130 +178,100 @@ export default function ScannerScreen() {
     const message = knownBeaconsMap[deviceName];
     if (!message) return;
 
-    console.log('Beacon conhecido detectado:', deviceName, 'RSSI:', device.rssi);
+    // <<< MUDANÇA: A verificação de UUID foi removida daqui.
 
-    // Se for Beacon-1, checar UUID
-    if (deviceName == 'Beacon-1') {
-      const expectedUUID = '12345678912345678912345678912345';
-      const deviceUUIDs = device.serviceUUIDs || [];
-      const hasCorrectUUID = deviceUUIDs.some(uuid => uuid.toLowerCase() === expectedUUID.toLowerCase());
-      if (!hasCorrectUUID) {
-        console.log('UUID não confere para Beacon-1, ignorando...', deviceUUIDs);
-        return;
-      }
-      console.log('UUID verificado com sucesso para Beacon-1');
-    }
+    const now = Date.now();
+    const lastNotified = lastNotificationTimestamps.current[deviceName] || 0;
 
-    const deviceIdentifier = deviceName;
-
-    // Usar ref para evitar problemas de closure/stale
-    if (lastNotifiedRef.current !== deviceIdentifier) {
-      lastNotifiedRef.current = deviceIdentifier;
-      setLastNotifiedDevice(deviceIdentifier);
-
+    if (now - lastNotified > NOTIFICATION_COOLDOWN) {
+      console.log(`Notificando sobre: ${deviceName}`);
+      lastNotificationTimestamps.current[deviceName] = now;
+      
       await triggerHapticFeedback();
       await speakMessage(message);
-
-      // Limpar notificação após 10s (usando functional updater para estado)
-      const id = deviceIdentifier;
-      setTimeout(() => {
-        setLastNotifiedDevice(prev => (prev === id ? '' : prev));
-        if (lastNotifiedRef.current === id) lastNotifiedRef.current = '';
-      }, 10000);
     }
 
     setNearbyDevices(prev => {
       const exists = prev.find(d => d.id === device.id);
-      if (!exists) {
-        return [...prev.slice(-9), device];
-      }
-      return prev;
+      return exists ? prev : [...prev.slice(-9), device];
     });
   };
 
   const startScanning = async () => {
-    console.log('Iniciando escaneamento...');
-
-    if (isScanningRef.current) return;
+    console.log('Tentando iniciar escaneamento...');
+    if (isScanningRef.current) {
+        console.log('Scan já está ativo.');
+        return;
+    }
 
     try {
       const hasPermissions = await requestPermissionsFromService();
       if (!hasPermissions) {
-        Alert.alert('Erro', 'Permissões de Bluetooth são necessárias');
+        Alert.alert('Erro', 'Permissões de Bluetooth são necessárias.');
         return;
       }
 
-      if (bluetoothState !== State.PoweredOn) {
-        Alert.alert('Erro', 'Bluetooth precisa estar ligado');
+      const currentBluetoothState = await bleManagerRef.current?.state();
+      if (currentBluetoothState !== State.PoweredOn) {
+        Alert.alert('Erro', `Bluetooth precisa estar ligado. Estado atual: ${currentBluetoothState || bluetoothState}`);
         return;
       }
 
       if (!bleManagerRef.current) {
         const initialized = await initializeBleManager();
         if (!initialized) {
-          Alert.alert('Erro', 'Não foi possível inicializar o Bluetooth');
+          Alert.alert('Erro', 'Não foi possível inicializar o Bluetooth.');
           return;
         }
       }
-
+      
       setIsScanning(true);
       setNearbyDevices([]);
-      setLastNotifiedDevice('');
+      lastNotificationTimestamps.current = {};
 
       await triggerHapticFeedback();
       await speakMessage('Iniciando escaneamento de beacons. Caminhe com segurança.');
 
-      // startDeviceScan NÃO é uma Promise, portanto NÃO devemos usar await aqui.
-      // Tratar erros dentro do callback
-      try {
-        bleManagerRef.current!.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
-          if (error) {
-            console.error('Erro no scan:', error);
-            Alert.alert('Erro no scan', error?.message ?? String(error));
-            // parar scan localmente
-            try { bleManagerRef.current?.stopDeviceScan(); } catch(e) { console.log('Erro ao parar scan após erro:', e); }
-            setIsScanning(false);
-            return;
-          }
-
-          if (device) {
-            handleDeviceDetected(device);
-          }
-        });
-      } catch (err) {
-        console.error('Erro iniciando startDeviceScan:', err);
-        Alert.alert('Erro', 'Não foi possível iniciar o escaneamento');
-        setIsScanning(false);
-      }
+      bleManagerRef.current!.startDeviceScan(null, { allowDuplicates: true }, (error, device) => {
+        if (error) {
+          console.error('Erro no scan:', error);
+          if (error.message.includes('cancelled')) return;
+          
+          Alert.alert('Erro no scan', error.message ?? String(error));
+          stopScanning();
+          return;
+        }
+        if (device) {
+          handleDeviceDetected(device);
+        }
+      });
 
     } catch (error) {
       console.error('Erro ao iniciar escaneamento:', error);
+      Alert.alert('Erro', 'Ocorreu um erro inesperado ao iniciar o escaneamento.');
       setIsScanning(false);
-      Alert.alert('Erro', 'Não foi possível iniciar o escaneamento');
     }
   };
 
   const stopScanning = useCallback(async () => {
     console.log('Parando escaneamento...');
-
-    if (!isScanningRef.current) return;
+    if (!bleManagerRef.current) return;
 
     try {
-      if (bleManagerRef.current) {
-        try { bleManagerRef.current.stopDeviceScan(); } catch(e) { console.log('Erro ao parar scan:', e); }
-      }
+      bleManagerRef.current.stopDeviceScan();
+      console.log('Scan parado com sucesso.');
     } catch (error) {
       console.error('Erro ao parar scan:', error);
     }
-
-    setIsScanning(false);
-    setLastNotifiedDevice('');
-    setNearbyDevices([]);
-
+    
+    if (isMountedRef.current) {
+        setIsScanning(false);
+    }
+    
     await triggerHapticFeedback();
     await speakMessage('Escaneamento interrompido.');
   }, []);
-
+  
   const toggleScanning = () => {
     if (isScanningRef.current) {
       stopScanning();
@@ -360,7 +286,7 @@ export default function ScannerScreen() {
         <Text style={styles.welcomeText}>Bem-vindo!</Text>
         <Text style={styles.instructionText}>
           {isScanning
-            ? 'Escaneamento ativo. Procurando por Beacon-1...'
+            ? 'Escaneamento ativo. Caminhe pelo ambiente...'
             : bluetoothState === State.PoweredOn
               ? 'Clique no botão para iniciar o escaneamento'
               : `Bluetooth: ${bluetoothState}`}
@@ -387,7 +313,7 @@ export default function ScannerScreen() {
         {isScanning && (
           <View style={styles.statusContainer}>
             <Text style={styles.statusText}>Procurando...</Text>
-            <Text style={styles.deviceCount}>{nearbyDevices.length} dispositivo(s) encontrado(s)</Text>
+            <Text style={styles.deviceCount}>{nearbyDevices.length} dispositivo(s) na lista</Text>
           </View>
         )}
 
@@ -401,9 +327,6 @@ export default function ScannerScreen() {
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>Mantenha o aplicativo aberto durante o uso</Text>
-
-
-
       </View>
     </View>
   );
@@ -522,31 +445,3 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
 });
-
-/*
-  Example services/permissions.ts (put this in your project and adapt as needed)
-
-  import { Platform, PermissionsAndroid } from 'react-native';
-
-  export async function requestPermissions() {
-    if (Platform.OS === 'android') {
-      if (Platform.Version >= 31) {
-        const perms = [
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        ];
-        const granted = await PermissionsAndroid.requestMultiple(perms);
-        return Object.values(granted).every(v => v === PermissionsAndroid.RESULTS.GRANTED);
-      }
-
-      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
-      return granted === PermissionsAndroid.RESULTS.GRANTED;
-    }
-
-    // iOS: make sure Info.plist has the required keys; runtime grant usually not needed
-    return true;
-  }
-
-  Also make sure AndroidManifest.xml and Info.plist include the permissions described in the chat.
-*/
