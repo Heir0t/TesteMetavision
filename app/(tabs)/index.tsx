@@ -17,10 +17,8 @@ import { getSettings } from '@/services/settings';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '@/api/supabaseClient';
 
-const NOTIFICATION_COOLDOWN = 10000; // 10 segundos
-// <<< NOVO: Limite de RSSI para notificação. Valores mais próximos de 0 são mais fortes.
-// -75 é um bom ponto de partida para ~5 metros. Ajuste conforme necessário.
-const RSSI_THRESHOLD = -75; 
+const ACTIVE_BEACON_TIMEOUT = 60000; 
+const RSSI_THRESHOLD = -75;
 
 type BeaconMap = Record<string, string>;
 
@@ -37,7 +35,7 @@ export default function ScannerScreen() {
   const subscriptionRef = useRef<any>(null);
   const isMountedRef = useRef(true);
 
-  const lastNotificationTimestamps = useRef<Record<string, number>>({});
+  const notifiedBeaconsRef = useRef<Set<string>>(new Set());
   const isScanningRef = useRef(false);
 
   useEffect(() => {
@@ -199,32 +197,31 @@ export default function ScannerScreen() {
     }
   };
 
-  // <<< FUNÇÃO ALTERADA >>>
   const handleDeviceDetected = async (device: Device) => {
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current || !isScanningRef.current) return;
 
-    // Ignora dispositivos sem nome ou sem RSSI (sinal)
     const deviceName = device.name || device.localName;
     if (!deviceName || device.rssi == null) return;
     
     const message = knownBeacons[deviceName];
     if (!message) return;
 
-    const now = Date.now();
-    const lastNotified = lastNotificationTimestamps.current[deviceName] || 0;
-
-    // Condição de notificação:
-    // 1. O sinal está forte o suficiente (próximo)?
-    // 2. Já passou o tempo de cooldown?
-    if (device.rssi > RSSI_THRESHOLD && now - lastNotified > NOTIFICATION_COOLDOWN) {
-      console.log(`Notificando sobre: ${deviceName} (RSSI: ${device.rssi})`);
-      lastNotificationTimestamps.current[deviceName] = now;
+    if (device.rssi > RSSI_THRESHOLD && !notifiedBeaconsRef.current.has(deviceName)) {
+      console.log(`NOVA DETECÇÃO: Notificando sobre ${deviceName} (RSSI: ${device.rssi})`);
+      
+      notifiedBeaconsRef.current.add(deviceName);
 
       await triggerHapticFeedback();
       await speakMessage(message);
+
+      setTimeout(() => {
+        if (isMountedRef.current) {
+          console.log(`Cooldown para ${deviceName} expirou. Pode notificar novamente.`);
+          notifiedBeaconsRef.current.delete(deviceName);
+        }
+      }, ACTIVE_BEACON_TIMEOUT);
     }
 
-    // Atualiza a lista de dispositivos próximos (opcional, apenas para UI)
     setNearbyDevices(prev => {
       const exists = prev.find(d => d.id === device.id);
       return exists ? prev : [...prev.slice(-9), device];
@@ -261,7 +258,9 @@ export default function ScannerScreen() {
 
       setIsScanning(true);
       setNearbyDevices([]);
-      lastNotificationTimestamps.current = {};
+      
+      // <<< ALTERAÇÃO 4: Limpa o Set de beacons ativos a cada novo escaneamento >>>
+      notifiedBeaconsRef.current.clear();
 
       await triggerHapticFeedback();
       await speakMessage('Iniciando escaneamento de beacons. Caminhe com segurança.');
@@ -329,7 +328,6 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.container}>
-      {/* ... seu JSX continua o mesmo aqui ... */}
       <View style={styles.header}>
         <Text style={styles.welcomeText}>Bem-vindo!</Text>
         <Text style={styles.instructionText}>
@@ -380,7 +378,6 @@ export default function ScannerScreen() {
   );
 }
 
-// <<< SEUS ESTILOS PERMANECEM OS MESMOS >>>
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -483,13 +480,6 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: 14,
     color: '#666',
-    textAlign: 'center',
-    fontStyle: 'italic',
-    marginBottom: 5,
-  },
-  footerSubtext: {
-    fontSize: 12,
-    color: '#888',
     textAlign: 'center',
     fontStyle: 'italic',
   },
