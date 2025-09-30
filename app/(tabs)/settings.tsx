@@ -7,18 +7,13 @@ import {
   TouchableOpacity,
   Switch,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Speech from 'expo-speech';
-import { Volume2, Vibrate, TestTube } from 'lucide-react-native';
-
-interface SettingsType {
-  vibrationEnabled: boolean;
-  speechRate: number;
-  speechPitch: number;
-  speechVolume: number;
-}
+import { Vibrate, TestTube } from 'lucide-react-native';
+import { getSettings, saveSettings, SettingsType } from '../../services/settings';
+import { supabase } from '../../api/supabaseClient';
 
 const DEFAULT_SETTINGS: SettingsType = {
   vibrationEnabled: true,
@@ -32,35 +27,29 @@ export default function SettingsScreen() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    loadSettings();
+    const loadInitialSettings = async () => {
+      setIsLoading(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        await supabase.auth.signInAnonymously();
+      }
+
+      const loadedSettings = await getSettings();
+      setSettings(loadedSettings);
+      setIsLoading(false);
+    };
+
+    loadInitialSettings();
   }, []);
 
-  const loadSettings = async () => {
-    try {
-      const savedSettings = await AsyncStorage.getItem('accessibility_settings');
-      if (savedSettings) {
-        setSettings(JSON.parse(savedSettings));
-      }
-    } catch (error) {
-      console.error('Erro ao carregar configurações:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const saveSettings = async (newSettings: SettingsType) => {
-    try {
-      await AsyncStorage.setItem('accessibility_settings', JSON.stringify(newSettings));
-      setSettings(newSettings);
-    } catch (error) {
-      console.error('Erro ao salvar configurações:', error);
-      Alert.alert('Erro', 'Não foi possível salvar as configurações.');
-    }
-  };
-
-  const updateSetting = (key: keyof SettingsType, value: any) => {
+  const updateSetting = async (key: keyof SettingsType, value: any) => {
     const newSettings = { ...settings, [key]: value };
-    saveSettings(newSettings);
+    const success = await saveSettings(newSettings);
+    if (!success) {
+      Alert.alert('Erro', 'Não foi possível salvar a configuração. Tente novamente.');
+      const oldSettings = await getSettings();
+      setSettings(oldSettings);
+    }
   };
 
   const testSpeech = () => {
@@ -79,10 +68,15 @@ export default function SettingsScreen() {
       'Tem certeza que deseja restaurar todas as configurações para os valores padrão?',
       [
         { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Restaurar', 
+        {
+          text: 'Restaurar',
           style: 'destructive',
-          onPress: () => saveSettings(DEFAULT_SETTINGS)
+          onPress: async () => {
+            setIsLoading(true);
+            setSettings(DEFAULT_SETTINGS);
+            await saveSettings(DEFAULT_SETTINGS);
+            setIsLoading(false);
+          },
         },
       ]
     );
@@ -91,104 +85,96 @@ export default function SettingsScreen() {
   if (isLoading) {
     return (
       <View style={[styles.container, styles.centerContent]}>
-        <Text style={styles.loadingText}>Carregando configurações...</Text>
+        <ActivityIndicator size="large" color="#007AFF" />
+        <Text style={styles.loadingText}>Carregando...</Text>
       </View>
     );
   }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Configurações</Text>
-        <Text style={styles.subtitle}>Personalize sua experiência</Text>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Configurações de Voz</Text>
-        
-        <View style={styles.settingItem}>
-          <Text style={styles.settingLabel}>Velocidade da Fala</Text>
-          <Text style={styles.settingValue}>
-            {Math.round(settings.speechRate * 100)}%
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={0.1}
-            maximumValue={1.0}
-            value={settings.speechRate}
-            onValueChange={(value) => updateSetting('speechRate', value)}
-            minimumTrackTintColor="#007AFF"
-            maximumTrackTintColor="#666"
-            thumbTintColor="#007AFF"
-          />
-          <Text style={styles.settingDescription}>
-            Controla a velocidade com que as mensagens são faladas
-          </Text>
+        <View style={styles.header}>
+            <Text style={styles.title}>Configurações</Text>
+            <Text style={styles.subtitle}>Personalize sua experiência</Text>
         </View>
 
-        <View style={styles.settingItem}>
-          <Text style={styles.settingLabel}>Tom da Voz</Text>
-          <Text style={styles.settingValue}>
-            {settings.speechPitch.toFixed(1)}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={0.5}
-            maximumValue={2.0}
-            value={settings.speechPitch}
-            onValueChange={(value) => updateSetting('speechPitch', value)}
-            minimumTrackTintColor="#007AFF"
-            maximumTrackTintColor="#666"
-            thumbTintColor="#007AFF"
-          />
-          <Text style={styles.settingDescription}>
-            Ajusta o tom (grave/agudo) da voz sintética
-          </Text>
-        </View>
-
-        <TouchableOpacity style={styles.testButton} onPress={testSpeech}>
-          <TestTube size={20} color="#ffffff" />
-          <Text style={styles.testButtonText}>Testar Voz</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Feedback Tátil</Text>
-        
-        <View style={styles.switchContainer}>
-          <View style={styles.switchInfo}>
-            <Vibrate size={24} color="#007AFF" />
-            <View style={styles.switchTextContainer}>
-              <Text style={styles.settingLabel}>Vibração</Text>
-              <Text style={styles.settingDescription}>
-                Vibra quando obstáculos são detectados
-              </Text>
+        {/* Seção de Voz */}
+        <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Configurações de Voz</Text>
+            
+            <View style={styles.settingItem}>
+                <Text style={styles.settingLabel}>Velocidade da Fala</Text>
+                <Text style={styles.settingValue}>{Math.round(settings.speechRate * 100)}%</Text>
+                <Slider
+                    style={styles.slider}
+                    minimumValue={0.1}
+                    maximumValue={1.0}
+                    value={settings.speechRate}
+                    onSlidingComplete={(value) => updateSetting('speechRate', value)}
+                    minimumTrackTintColor="#007AFF"
+                    maximumTrackTintColor="#666"
+                    thumbTintColor="#007AFF"
+                />
+                <Text style={styles.settingDescription}>Controla a velocidade com que as mensagens são faladas</Text>
             </View>
-          </View>
-          <Switch
-            value={settings.vibrationEnabled}
-            onValueChange={(value) => updateSetting('vibrationEnabled', value)}
-            trackColor={{ false: '#666', true: '#007AFF' }}
-            thumbColor={settings.vibrationEnabled ? '#ffffff' : '#cccccc'}
-          />
-        </View>
-      </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Informações</Text>
-        
-        <View style={styles.infoContainer}>
-          <Text style={styles.infoText}>
-            <Text style={styles.boldText}>Versão:</Text> 1.0.0{'\n'}
-            <Text style={styles.boldText}>Idioma:</Text> Português (Brasil){'\n'}
-            <Text style={styles.boldText}>Desenvolvido para:</Text> Acessibilidade Urbana
-          </Text>
-        </View>
-      </View>
+            <View style={styles.settingItem}>
+                <Text style={styles.settingLabel}>Tom da Voz</Text>
+                <Text style={styles.settingValue}>{settings.speechPitch.toFixed(1)}</Text>
+                <Slider
+                    style={styles.slider}
+                    minimumValue={0.5}
+                    maximumValue={2.0}
+                    value={settings.speechPitch}
+                    onSlidingComplete={(value) => updateSetting('speechPitch', value)}
+                    minimumTrackTintColor="#007AFF"
+                    maximumTrackTintColor="#666"
+                    thumbTintColor="#007AFF"
+                />
+                <Text style={styles.settingDescription}>Ajusta o tom (grave/agudo) da voz sintética</Text>
+            </View>
 
-      <TouchableOpacity style={styles.resetButton} onPress={resetSettings}>
-        <Text style={styles.resetButtonText}>Restaurar Configurações Padrão</Text>
-      </TouchableOpacity>
+            <TouchableOpacity style={styles.testButton} onPress={testSpeech}>
+                <TestTube size={20} color="#ffffff" />
+                <Text style={styles.testButtonText}>Testar Voz</Text>
+            </TouchableOpacity>
+        </View>
+
+        {/* Seção de Feedback Tátil */}
+        <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Feedback Tátil</Text>
+            <View style={styles.switchContainer}>
+                <View style={styles.switchInfo}>
+                    <Vibrate size={24} color="#007AFF" />
+                    <View style={styles.switchTextContainer}>
+                        <Text style={styles.settingLabel}>Vibração</Text>
+                        <Text style={styles.settingDescription}>Vibra quando obstáculos são detectados</Text>
+                    </View>
+                </View>
+                <Switch
+                    value={settings.vibrationEnabled}
+                    onValueChange={(value) => updateSetting('vibrationEnabled', value)}
+                    trackColor={{ false: '#666', true: '#007AFF' }}
+                    thumbColor={settings.vibrationEnabled ? '#ffffff' : '#cccccc'}
+                />
+            </View>
+        </View>
+
+        {/* Seção de Informações */}
+        <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Informações</Text>
+            <View style={styles.infoContainer}>
+                <Text style={styles.infoText}>
+                    <Text style={styles.boldText}>Versão:</Text> 1.0.0{'\n'}
+                    <Text style={styles.boldText}>Idioma:</Text> Português (Brasil){'\n'}
+                    <Text style={styles.boldText}>Desenvolvido para:</Text> Acessibilidade Urbana
+                </Text>
+            </View>
+        </View>
+
+        <TouchableOpacity style={styles.resetButton} onPress={resetSettings}>
+            <Text style={styles.resetButtonText}>Restaurar Configurações Padrão</Text>
+        </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -319,5 +305,6 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: 18,
     color: '#ffffff',
+    marginTop: 10,
   },
 });
