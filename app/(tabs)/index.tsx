@@ -18,6 +18,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '@/api/supabaseClient';
 
 const NOTIFICATION_COOLDOWN = 10000; // 10 segundos
+// <<< NOVO: Limite de RSSI para notificação. Valores mais próximos de 0 são mais fortes.
+// -75 é um bom ponto de partida para ~5 metros. Ajuste conforme necessário.
+const RSSI_THRESHOLD = -75; 
 
 type BeaconMap = Record<string, string>;
 
@@ -28,7 +31,6 @@ export default function ScannerScreen() {
   
   const [knownBeacons, setKnownBeacons] = useState<BeaconMap>({});
   const [isLoadingBeacons, setIsLoadingBeacons] = useState(true);
-
 
   const bleManagerRef = useRef<BleManager | null>(null);
   const isInitializedRef = useRef(false);
@@ -42,14 +44,13 @@ export default function ScannerScreen() {
     isScanningRef.current = isScanning;
   }, [isScanning]);
 
-  // Função para buscar os beacons do Supabase
   const fetchBeacons = useCallback(async () => {
     console.log('Buscando beacons do Supabase...');
     setIsLoadingBeacons(true);
     
     const { data, error } = await supabase
       .from('beacons')
-      .select('name, message'); // <<< CORRIGIDO
+      .select('name, message');
 
     if (error) {
       console.error('Erro ao buscar beacons:', error);
@@ -57,7 +58,7 @@ export default function ScannerScreen() {
       setKnownBeacons({});
     } else if (data) {
       const beaconMap = data.reduce((acc: BeaconMap, beacon) => {
-        acc[beacon.name] = beacon.message; // <<< CORRIGIDO
+        acc[beacon.name] = beacon.message;
         return acc;
       }, {});
       setKnownBeacons(beaconMap);
@@ -66,7 +67,6 @@ export default function ScannerScreen() {
     setIsLoadingBeacons(false);
   }, []);
 
-  // Busca os beacons quando o componente é montado pela primeira vez
   useEffect(() => {
     fetchBeacons();
   }, [fetchBeacons]);
@@ -199,11 +199,13 @@ export default function ScannerScreen() {
     }
   };
 
+  // <<< FUNÇÃO ALTERADA >>>
   const handleDeviceDetected = async (device: Device) => {
     if (!isMountedRef.current) return;
 
+    // Ignora dispositivos sem nome ou sem RSSI (sinal)
     const deviceName = device.name || device.localName;
-    if (!deviceName) return;
+    if (!deviceName || device.rssi == null) return;
     
     const message = knownBeacons[deviceName];
     if (!message) return;
@@ -211,14 +213,18 @@ export default function ScannerScreen() {
     const now = Date.now();
     const lastNotified = lastNotificationTimestamps.current[deviceName] || 0;
 
-    if (now - lastNotified > NOTIFICATION_COOLDOWN) {
-      console.log(`Notificando sobre: ${deviceName}`);
+    // Condição de notificação:
+    // 1. O sinal está forte o suficiente (próximo)?
+    // 2. Já passou o tempo de cooldown?
+    if (device.rssi > RSSI_THRESHOLD && now - lastNotified > NOTIFICATION_COOLDOWN) {
+      console.log(`Notificando sobre: ${deviceName} (RSSI: ${device.rssi})`);
       lastNotificationTimestamps.current[deviceName] = now;
 
       await triggerHapticFeedback();
       await speakMessage(message);
     }
 
+    // Atualiza a lista de dispositivos próximos (opcional, apenas para UI)
     setNearbyDevices(prev => {
       const exists = prev.find(d => d.id === device.id);
       return exists ? prev : [...prev.slice(-9), device];
@@ -323,6 +329,7 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.container}>
+      {/* ... seu JSX continua o mesmo aqui ... */}
       <View style={styles.header}>
         <Text style={styles.welcomeText}>Bem-vindo!</Text>
         <Text style={styles.instructionText}>
@@ -373,6 +380,7 @@ export default function ScannerScreen() {
   );
 }
 
+// <<< SEUS ESTILOS PERMANECEM OS MESMOS >>>
 const styles = StyleSheet.create({
   container: {
     flex: 1,
