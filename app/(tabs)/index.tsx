@@ -17,8 +17,9 @@ import { getSettings } from '@/services/settings';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '@/api/supabaseClient';
 
-const ACTIVE_BEACON_TIMEOUT = 60000; 
+const ACTIVE_BEACON_TIMEOUT = 60000;
 const RSSI_THRESHOLD = -75;
+const SMOOTHING_FACTOR = 4;
 
 type BeaconMap = Record<string, string>;
 
@@ -26,7 +27,6 @@ export default function ScannerScreen() {
   const [isScanning, setIsScanning] = useState(false);
   const [nearbyDevices, setNearbyDevices] = useState<Device[]>([]);
   const [bluetoothState, setBluetoothState] = useState<State>(State.Unknown as State);
-  
   const [knownBeacons, setKnownBeacons] = useState<BeaconMap>({});
   const [isLoadingBeacons, setIsLoadingBeacons] = useState(true);
 
@@ -34,25 +34,21 @@ export default function ScannerScreen() {
   const isInitializedRef = useRef(false);
   const subscriptionRef = useRef<any>(null);
   const isMountedRef = useRef(true);
+  const isScanningRef = useRef(false);
 
   const notifiedBeaconsRef = useRef<Set<string>>(new Set());
-  const isScanningRef = useRef(false);
+  const rssiHistoryRef = useRef<Record<string, number[]>>({});
 
   useEffect(() => {
     isScanningRef.current = isScanning;
   }, [isScanning]);
 
   const fetchBeacons = useCallback(async () => {
-    console.log('Buscando beacons do Supabase...');
     setIsLoadingBeacons(true);
-    
-    const { data, error } = await supabase
-      .from('beacons')
-      .select('name, message');
-
+    const { data, error } = await supabase.from('beacons').select('name, message');
     if (error) {
       console.error('Erro ao buscar beacons:', error);
-      Alert.alert('Erro de Conexão', 'Não foi possível carregar os dados dos beacons. Verifique sua internet.');
+      Alert.alert('Erro de Conexão', 'Não foi possível carregar os dados dos beacons.');
       setKnownBeacons({});
     } else if (data) {
       const beaconMap = data.reduce((acc: BeaconMap, beacon) => {
@@ -60,7 +56,6 @@ export default function ScannerScreen() {
         return acc;
       }, {});
       setKnownBeacons(beaconMap);
-      console.log('Beacons carregados com sucesso:', beaconMap);
     }
     setIsLoadingBeacons(false);
   }, []);
@@ -73,9 +68,7 @@ export default function ScannerScreen() {
     if (isInitializedRef.current && bleManagerRef.current) {
       return true;
     }
-
     try {
-      console.log('Inicializando BleManager...');
       if (bleManagerRef.current) {
         try {
           bleManagerRef.current.destroy();
@@ -84,13 +77,10 @@ export default function ScannerScreen() {
         }
       }
       bleManagerRef.current = new BleManager();
-
       subscriptionRef.current = bleManagerRef.current.onStateChange((newState: State) => {
-        console.log('Estado do Bluetooth mudou para:', newState);
         if (isMountedRef.current) {
           setBluetoothState(newState);
           if (newState !== State.PoweredOn) {
-            console.log('Bluetooth não está PoweredOn: parando scan...');
             try {
               if (bleManagerRef.current && isScanningRef.current) {
                 bleManagerRef.current.stopDeviceScan();
@@ -105,11 +95,8 @@ export default function ScannerScreen() {
           }
         }
       }, true);
-
       isInitializedRef.current = true;
-      console.log('BleManager inicializado com sucesso');
       return true;
-
     } catch (error) {
       console.error('Erro ao inicializar BleManager:', error);
       isInitializedRef.current = false;
@@ -119,7 +106,6 @@ export default function ScannerScreen() {
   }, []);
 
   const cleanupBleManager = useCallback(() => {
-    console.log('Fazendo cleanup do BleManager...');
     if (subscriptionRef.current) {
       try { subscriptionRef.current.remove(); } catch (e) { console.log('Erro removendo subscrição:', e); }
       subscriptionRef.current = null;
@@ -143,17 +129,13 @@ export default function ScannerScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      console.log('Tela ganhou foco');
       initializeBleManager();
-      return () => {
-        console.log('Tela perdeu foco (não paramos scan automaticamente)');
-      };
+      return () => { };
     }, [initializeBleManager])
   );
 
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
-      console.log('AppState mudou para:', nextAppState);
       if (nextAppState === 'active' && !isInitializedRef.current) {
         initializeBleManager();
       }
@@ -185,12 +167,12 @@ export default function ScannerScreen() {
     }
   };
 
-  const triggerHapticFeedback = async () => {
+  const triggerHapticFeedback = async (style: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Medium) => {
     if (Platform.OS === 'web') return;
     try {
       const settings = await getSettings();
       if (settings.vibrationEnabled) {
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        await Haptics.impactAsync(style);
       }
     } catch (error) {
       console.error('Erro no feedback háptico:', error);
@@ -202,26 +184,38 @@ export default function ScannerScreen() {
 
     const deviceName = device.name || device.localName;
     if (!deviceName || device.rssi == null) return;
-    
+
     const message = knownBeacons[deviceName];
     if (!message) return;
 
-    if (device.rssi > RSSI_THRESHOLD && !notifiedBeaconsRef.current.has(deviceName)) {
-      console.log(`NOVA DETECÇÃO: Notificando sobre ${deviceName} (RSSI: ${device.rssi})`);
-      
+    const history = rssiHistoryRef.current[deviceName] || [];
+    history.push(device.rssi);
+    if (history.length > SMOOTHING_FACTOR) {
+      history.shift();
+    }
+    rssiHistoryRef.current[deviceName] = history;
+
+    if (history.length < SMOOTHING_FACTOR) return;
+
+    const currentRssi = history[history.length - 1];
+    const previousRssiAvg = history.slice(0, -1).reduce((acc, val) => acc + val, 0) / (history.length - 1);
+
+    const isApproaching = currentRssi > previousRssiAvg;
+    const isCloseEnough = currentRssi > RSSI_THRESHOLD;
+
+    if (isCloseEnough && isApproaching && !notifiedBeaconsRef.current.has(deviceName)) {
       notifiedBeaconsRef.current.add(deviceName);
 
-      await triggerHapticFeedback();
+      await triggerHapticFeedback(Haptics.ImpactFeedbackStyle.Heavy);
       await speakMessage(message);
 
       setTimeout(() => {
         if (isMountedRef.current) {
-          console.log(`Cooldown para ${deviceName} expirou. Pode notificar novamente.`);
           notifiedBeaconsRef.current.delete(deviceName);
         }
       }, ACTIVE_BEACON_TIMEOUT);
     }
-
+   
     setNearbyDevices(prev => {
       const exists = prev.find(d => d.id === device.id);
       return exists ? prev : [...prev.slice(-9), device];
@@ -229,9 +223,7 @@ export default function ScannerScreen() {
   };
 
   const startScanning = async () => {
-    console.log('Tentando iniciar escaneamento...');
     if (isScanningRef.current) {
-      console.log('Scan já está ativo.');
       return;
     }
 
@@ -258,18 +250,16 @@ export default function ScannerScreen() {
 
       setIsScanning(true);
       setNearbyDevices([]);
-      
-      // <<< ALTERAÇÃO 4: Limpa o Set de beacons ativos a cada novo escaneamento >>>
-      notifiedBeaconsRef.current.clear();
 
-      await triggerHapticFeedback();
-      await speakMessage('Iniciando escaneamento de beacons. Caminhe com segurança.');
+      notifiedBeaconsRef.current.clear();
+      rssiHistoryRef.current = {};
+
+      await triggerHapticFeedback(Haptics.ImpactFeedbackStyle.Medium);
+      await speakMessage('Iniciando escaneamento. Caminhe com segurança.');
 
       bleManagerRef.current!.startDeviceScan(null, { allowDuplicates: true }, (error, device) => {
         if (error) {
-          console.error('Erro no scan:', error);
           if (error.message.includes('cancelled')) return;
-
           Alert.alert('Erro no scan', error.message ?? String(error));
           stopScanning();
           return;
@@ -287,12 +277,10 @@ export default function ScannerScreen() {
   };
 
   const stopScanning = useCallback(async () => {
-    console.log('Parando escaneamento...');
     if (!bleManagerRef.current) return;
 
     try {
       bleManagerRef.current.stopDeviceScan();
-      console.log('Scan parado com sucesso.');
     } catch (error) {
       console.error('Erro ao parar scan:', error);
     }
@@ -301,7 +289,7 @@ export default function ScannerScreen() {
       setIsScanning(false);
     }
 
-    await triggerHapticFeedback();
+    await triggerHapticFeedback(Haptics.ImpactFeedbackStyle.Medium);
     await speakMessage('Escaneamento interrompido.');
   }, []);
 
