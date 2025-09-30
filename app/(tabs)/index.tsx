@@ -7,6 +7,7 @@ import {
   Alert,
   Platform,
   AppState,
+  ActivityIndicator,
 } from 'react-native';
 import { BleManager, Device, State } from 'react-native-ble-plx';
 import * as Speech from 'expo-speech';
@@ -14,13 +15,20 @@ import * as Haptics from 'expo-haptics';
 import { requestPermissions as requestPermissionsFromService } from '@/services/permissions';
 import { getSettings } from '@/services/settings';
 import { useFocusEffect } from '@react-navigation/native';
+import { supabase } from '@/api/supabaseClient';
 
 const NOTIFICATION_COOLDOWN = 10000; // 10 segundos
+
+type BeaconMap = Record<string, string>;
 
 export default function ScannerScreen() {
   const [isScanning, setIsScanning] = useState(false);
   const [nearbyDevices, setNearbyDevices] = useState<Device[]>([]);
   const [bluetoothState, setBluetoothState] = useState<State>(State.Unknown as State);
+  
+  const [knownBeacons, setKnownBeacons] = useState<BeaconMap>({});
+  const [isLoadingBeacons, setIsLoadingBeacons] = useState(true);
+
 
   const bleManagerRef = useRef<BleManager | null>(null);
   const isInitializedRef = useRef(false);
@@ -33,6 +41,35 @@ export default function ScannerScreen() {
   useEffect(() => {
     isScanningRef.current = isScanning;
   }, [isScanning]);
+
+  // Função para buscar os beacons do Supabase
+  const fetchBeacons = useCallback(async () => {
+    console.log('Buscando beacons do Supabase...');
+    setIsLoadingBeacons(true);
+    
+    const { data, error } = await supabase
+      .from('beacons')
+      .select('name, message'); // <<< CORRIGIDO
+
+    if (error) {
+      console.error('Erro ao buscar beacons:', error);
+      Alert.alert('Erro de Conexão', 'Não foi possível carregar os dados dos beacons. Verifique sua internet.');
+      setKnownBeacons({});
+    } else if (data) {
+      const beaconMap = data.reduce((acc: BeaconMap, beacon) => {
+        acc[beacon.name] = beacon.message; // <<< CORRIGIDO
+        return acc;
+      }, {});
+      setKnownBeacons(beaconMap);
+      console.log('Beacons carregados com sucesso:', beaconMap);
+    }
+    setIsLoadingBeacons(false);
+  }, []);
+
+  // Busca os beacons quando o componente é montado pela primeira vez
+  useEffect(() => {
+    fetchBeacons();
+  }, [fetchBeacons]);
 
   const initializeBleManager = useCallback(async () => {
     if (isInitializedRef.current && bleManagerRef.current) {
@@ -49,7 +86,7 @@ export default function ScannerScreen() {
         }
       }
       bleManagerRef.current = new BleManager();
-      
+
       subscriptionRef.current = bleManagerRef.current.onStateChange((newState: State) => {
         console.log('Estado do Bluetooth mudou para:', newState);
         if (isMountedRef.current) {
@@ -86,7 +123,7 @@ export default function ScannerScreen() {
   const cleanupBleManager = useCallback(() => {
     console.log('Fazendo cleanup do BleManager...');
     if (subscriptionRef.current) {
-      try { subscriptionRef.current.remove(); } catch(e){ console.log('Erro removendo subscrição:', e); }
+      try { subscriptionRef.current.remove(); } catch (e) { console.log('Erro removendo subscrição:', e); }
       subscriptionRef.current = null;
     }
     if (bleManagerRef.current) {
@@ -115,7 +152,7 @@ export default function ScannerScreen() {
       };
     }, [initializeBleManager])
   );
-  
+
   useEffect(() => {
     const handleAppStateChange = (nextAppState: string) => {
       console.log('AppState mudou para:', nextAppState);
@@ -128,7 +165,7 @@ export default function ScannerScreen() {
       subscription?.remove();
     };
   }, [initializeBleManager]);
-  
+
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -164,21 +201,12 @@ export default function ScannerScreen() {
 
   const handleDeviceDetected = async (device: Device) => {
     if (!isMountedRef.current) return;
-    
+
     const deviceName = device.name || device.localName;
     if (!deviceName) return;
     
-    const knownBeaconsMap: Record<string, string> = {
-      'Beacon-1': 'Você está no estande do Metavision',
-      'Beacon-Escada': 'Atenção: escada detectada à frente.',
-      'Beacon-Banco': 'Banco disponível à frente.',
-      'Beacon-Spotify': 'Spotify, seu aplicativo de música',
-    };
-
-    const message = knownBeaconsMap[deviceName];
+    const message = knownBeacons[deviceName];
     if (!message) return;
-
-    // <<< MUDANÇA: A verificação de UUID foi removida daqui.
 
     const now = Date.now();
     const lastNotified = lastNotificationTimestamps.current[deviceName] || 0;
@@ -186,7 +214,7 @@ export default function ScannerScreen() {
     if (now - lastNotified > NOTIFICATION_COOLDOWN) {
       console.log(`Notificando sobre: ${deviceName}`);
       lastNotificationTimestamps.current[deviceName] = now;
-      
+
       await triggerHapticFeedback();
       await speakMessage(message);
     }
@@ -200,8 +228,8 @@ export default function ScannerScreen() {
   const startScanning = async () => {
     console.log('Tentando iniciar escaneamento...');
     if (isScanningRef.current) {
-        console.log('Scan já está ativo.');
-        return;
+      console.log('Scan já está ativo.');
+      return;
     }
 
     try {
@@ -224,7 +252,7 @@ export default function ScannerScreen() {
           return;
         }
       }
-      
+
       setIsScanning(true);
       setNearbyDevices([]);
       lastNotificationTimestamps.current = {};
@@ -236,7 +264,7 @@ export default function ScannerScreen() {
         if (error) {
           console.error('Erro no scan:', error);
           if (error.message.includes('cancelled')) return;
-          
+
           Alert.alert('Erro no scan', error.message ?? String(error));
           stopScanning();
           return;
@@ -263,15 +291,15 @@ export default function ScannerScreen() {
     } catch (error) {
       console.error('Erro ao parar scan:', error);
     }
-    
+
     if (isMountedRef.current) {
-        setIsScanning(false);
+      setIsScanning(false);
     }
-    
+
     await triggerHapticFeedback();
     await speakMessage('Escaneamento interrompido.');
   }, []);
-  
+
   const toggleScanning = () => {
     if (isScanningRef.current) {
       stopScanning();
@@ -280,16 +308,25 @@ export default function ScannerScreen() {
     }
   };
 
+  const getInstructionText = () => {
+    if (isScanning) {
+      return 'Escaneamento ativo. Caminhe pelo ambiente...';
+    }
+    if (isLoadingBeacons) {
+      return 'Carregando dados dos beacons...';
+    }
+    if (bluetoothState !== State.PoweredOn) {
+      return `Bluetooth: ${bluetoothState}`;
+    }
+    return 'Clique no botão para iniciar o escaneamento';
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.welcomeText}>Bem-vindo!</Text>
         <Text style={styles.instructionText}>
-          {isScanning
-            ? 'Escaneamento ativo. Caminhe pelo ambiente...'
-            : bluetoothState === State.PoweredOn
-              ? 'Clique no botão para iniciar o escaneamento'
-              : `Bluetooth: ${bluetoothState}`}
+          {getInstructionText()}
         </Text>
       </View>
 
@@ -298,16 +335,20 @@ export default function ScannerScreen() {
           style={[
             styles.scanButton,
             isScanning && styles.scanButtonActive,
-            bluetoothState !== State.PoweredOn && styles.scanButtonDisabled,
+            (bluetoothState !== State.PoweredOn || isLoadingBeacons) && styles.scanButtonDisabled,
           ]}
           onPress={toggleScanning}
-          disabled={bluetoothState !== State.PoweredOn}
+          disabled={bluetoothState !== State.PoweredOn || isLoadingBeacons}
           accessible={true}
           accessibilityRole="button"
           accessibilityLabel={isScanning ? 'Parar escaneamento' : 'Iniciar escaneamento'}
           accessibilityHint={isScanning ? 'Toque para parar o escaneamento de beacons' : 'Toque para iniciar o escaneamento de beacons'}
         >
-          <Text style={styles.scanButtonText}>{isScanning ? 'Parar' : 'Iniciar'}</Text>
+          {isLoadingBeacons ? (
+            <ActivityIndicator size="large" color="#ffffff" />
+          ) : (
+            <Text style={styles.scanButtonText}>{isScanning ? 'Parar' : 'Iniciar'}</Text>
+          )}
         </TouchableOpacity>
 
         {isScanning && (
