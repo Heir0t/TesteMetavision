@@ -172,7 +172,7 @@ export default function ScannerScreen() {
       console.error('Erro no feedback háptico:', error);
     }
   };
-  
+
   const stopProximityVibration = useCallback(() => {
     if (vibrationIntervalRef.current) {
       clearInterval(vibrationIntervalRef.current);
@@ -378,6 +378,17 @@ export default function ScannerScreen() {
           ) : (
             <Text style={styles.scanButtonText}>{isScanning ? 'Parar' : 'Iniciar'}</Text>
           )}
+        </TouchableOpacity>
+
+          // Dentro do seu return, talvez abaixo do botão principal:
+        <TouchableOpacity
+          style={{ backgroundColor: 'orange', padding: 20, borderRadius: 10, marginTop: 20 }}
+          onPress={() => {
+            console.log("TESTANDO VIBRAÇÃO...");
+            Vibration.vibrate(500); 
+          }}
+        >
+          <Text style={{ color: 'white' }}>Testar Vibração</Text>
         </TouchableOpacity>
 
         {isScanning && (
