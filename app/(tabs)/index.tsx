@@ -8,6 +8,7 @@ import {
   Platform,
   AppState,
   ActivityIndicator,
+  Vibration,
 } from 'react-native';
 import { BleManager, Device, State } from 'react-native-ble-plx';
 import * as Speech from 'expo-speech';
@@ -18,19 +19,24 @@ import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '@/api/supabaseClient';
 
 const ACTIVE_BEACON_TIMEOUT = 60000;
-const RSSI_THRESHOLD = -75;
-const EMA_ALPHA = 0.4; 
+const EMA_ALPHA = 0.4;
+
+const TX_POWER_AT_1M = -59;
+const ENVIRONMENTAL_FACTOR = 2.0;
 
 type BeaconMap = Record<string, string>;
 
-const getHapticStyleForRssi = (rssi: number): Haptics.ImpactFeedbackStyle => {
-  if (rssi > -65) { 
-    return Haptics.ImpactFeedbackStyle.Heavy;
+const calculateDistance = (rssi: number): number => {
+  if (rssi === 0) {
+    return -1.0;
   }
-  if (rssi > -80) { 
-    return Haptics.ImpactFeedbackStyle.Medium;
+  const ratio = rssi * 1.0 / TX_POWER_AT_1M;
+  if (ratio < 1.0) {
+    return Math.pow(ratio, 10);
+  } else {
+    const distance = Math.pow(10, (TX_POWER_AT_1M - rssi) / (10 * ENVIRONMENTAL_FACTOR));
+    return distance;
   }
-  return Haptics.ImpactFeedbackStyle.Light;
 };
 
 export default function ScannerScreen() {
@@ -181,26 +187,27 @@ export default function ScannerScreen() {
       console.error('Erro no feedback háptico:', error);
     }
   };
-
+  
   const stopProximityVibration = useCallback(() => {
     if (vibrationIntervalRef.current) {
       clearInterval(vibrationIntervalRef.current as NodeJS.Timeout);
       vibrationIntervalRef.current = null;
     }
+    Vibration.cancel();
   }, []);
 
   const startProximityVibration = useCallback(async (rssi: number) => {
     stopProximityVibration();
-  
+
     const settings = await getSettings();
     if (!settings.vibrationEnabled) return;
-  
+
     const proximity = 100 + rssi;
-    const interval = Math.max(200, 1200 - proximity * 10);
-    const hapticStyle = getHapticStyleForRssi(rssi);
-  
+    const interval = Math.max(150, 800 - proximity * 10);
+    const vibrationDuration = 100;
+
     vibrationIntervalRef.current = setInterval(() => {
-      Haptics.impactAsync(hapticStyle);
+      Vibration.vibrate(vibrationDuration);
     }, interval);
   }, [stopProximityVibration]);
 
@@ -217,10 +224,10 @@ export default function ScannerScreen() {
 
   const handleDeviceDetected = async (device: Device) => {
     if (!isMountedRef.current || !isScanningRef.current) return;
-
+  
     const deviceName = device.name || device.localName;
     if (!deviceName || device.rssi == null) return;
-
+  
     const message = knownBeacons[deviceName];
     if (message) {
       const currentRssi = device.rssi;
@@ -229,10 +236,10 @@ export default function ScannerScreen() {
       const newSmoothedRssi = (EMA_ALPHA * currentRssi) + (1 - EMA_ALPHA) * previousSmoothedRssi;
       smoothedRssiRef.current[deviceName] = newSmoothedRssi;
       
+      const distance = calculateDistance(newSmoothedRssi);
       const isApproaching = newSmoothedRssi > previousSmoothedRssi;
-      const isCloseEnough = newSmoothedRssi > RSSI_THRESHOLD;
-
-      if (isCloseEnough && isApproaching && !notifiedBeaconsRef.current.has(deviceName)) {
+  
+      if (distance <= 2.5 && isApproaching && !notifiedBeaconsRef.current.has(deviceName)) {
         notifiedBeaconsRef.current.add(deviceName);
         await triggerHapticFeedback(Haptics.ImpactFeedbackStyle.Heavy);
         await speakMessage(message);
@@ -243,22 +250,27 @@ export default function ScannerScreen() {
         }, ACTIVE_BEACON_TIMEOUT);
       }
     }
-
-    setNearbyDevices(prev => {
+  
+    setNearbyDevices((prev: Device[]) => {
       const existingDeviceIndex = prev.findIndex(d => d.id === device.id);
-      let newDevices;
-
+      let newDevices: Device[];
+  
       if (existingDeviceIndex > -1) {
-        newDevices = [...prev];
-        newDevices[existingDeviceIndex].rssi = smoothedRssiRef.current[deviceName] || device.rssi;
+        newDevices = prev.map((d, index) => {
+          if (index === existingDeviceIndex) {
+            return { ...d, rssi: smoothedRssiRef.current[deviceName] || device.rssi } as Device;
+          }
+          return d;
+        });
       } else {
-        newDevices = [...prev, device].slice(-10);
+        const newDevice = { ...device, rssi: smoothedRssiRef.current[deviceName] || device.rssi } as Device;
+        newDevices = [...prev, newDevice].slice(-10);
       }
-
+  
       const closestDevice = newDevices
         .filter(d => d.name && knownBeacons[d.name] && d.rssi != null)
         .sort((a, b) => b.rssi! - a.rssi!)[0];
-
+  
       if (closestDevice && closestDevice.rssi) {
         setClosestBeaconRssi(closestDevice.rssi);
       } else {
@@ -296,7 +308,7 @@ export default function ScannerScreen() {
       setIsScanning(true);
       setNearbyDevices([]);
       notifiedBeaconsRef.current.clear();
-      smoothedRssiRef.current = {}; // Limpa os valores de RSSI suavizados
+      smoothedRssiRef.current = {};
 
       await triggerHapticFeedback(Haptics.ImpactFeedbackStyle.Medium);
       await speakMessage('Iniciando escaneamento. Caminhe com segurança.');
