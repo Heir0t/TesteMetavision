@@ -8,6 +8,7 @@ import {
   Platform,
   AppState,
   ActivityIndicator,
+  Vibration,
 } from 'react-native';
 import { BleManager, Device, State } from 'react-native-ble-plx';
 import * as Speech from 'expo-speech';
@@ -29,15 +30,16 @@ export default function ScannerScreen() {
   const [bluetoothState, setBluetoothState] = useState<State>(State.Unknown as State);
   const [knownBeacons, setKnownBeacons] = useState<BeaconMap>({});
   const [isLoadingBeacons, setIsLoadingBeacons] = useState(true);
+  const [closestBeaconRssi, setClosestBeaconRssi] = useState<number | null>(null);
 
   const bleManagerRef = useRef<BleManager | null>(null);
   const isInitializedRef = useRef(false);
   const subscriptionRef = useRef<any>(null);
   const isMountedRef = useRef(true);
   const isScanningRef = useRef(false);
-
   const notifiedBeaconsRef = useRef<Set<string>>(new Set());
   const rssiHistoryRef = useRef<Record<string, number[]>>({});
+  const vibrationIntervalRef = useRef<NodeJS.Timeout | number | null>(null);
 
   useEffect(() => {
     isScanningRef.current = isScanning;
@@ -70,23 +72,15 @@ export default function ScannerScreen() {
     }
     try {
       if (bleManagerRef.current) {
-        try {
-          bleManagerRef.current.destroy();
-        } catch (error) {
-          console.log('Erro ao destruir instância anterior:', error);
-        }
+        bleManagerRef.current.destroy();
       }
       bleManagerRef.current = new BleManager();
       subscriptionRef.current = bleManagerRef.current.onStateChange((newState: State) => {
         if (isMountedRef.current) {
           setBluetoothState(newState);
           if (newState !== State.PoweredOn) {
-            try {
-              if (bleManagerRef.current && isScanningRef.current) {
-                bleManagerRef.current.stopDeviceScan();
-              }
-            } catch (err) {
-              console.log('Erro ao parar scan quando bluetooth mudou:', err);
+            if (bleManagerRef.current && isScanningRef.current) {
+              bleManagerRef.current.stopDeviceScan();
             }
             if (isMountedRef.current) {
               setIsScanning(false);
@@ -107,7 +101,7 @@ export default function ScannerScreen() {
 
   const cleanupBleManager = useCallback(() => {
     if (subscriptionRef.current) {
-      try { subscriptionRef.current.remove(); } catch (e) { console.log('Erro removendo subscrição:', e); }
+      subscriptionRef.current.remove();
       subscriptionRef.current = null;
     }
     if (bleManagerRef.current) {
@@ -178,6 +172,37 @@ export default function ScannerScreen() {
       console.error('Erro no feedback háptico:', error);
     }
   };
+  
+  const stopProximityVibration = useCallback(() => {
+    if (vibrationIntervalRef.current) {
+      clearInterval(vibrationIntervalRef.current);
+      vibrationIntervalRef.current = null;
+    }
+    Vibration.cancel();
+  }, []);
+
+  const startProximityVibration = useCallback((rssi: number) => {
+    stopProximityVibration();
+
+    const proximity = 100 + rssi;
+    const interval = Math.max(150, 800 - proximity * 10);
+    const vibrationDuration = 100;
+
+    vibrationIntervalRef.current = setInterval(() => {
+      Vibration.vibrate(vibrationDuration);
+    }, interval);
+  }, [stopProximityVibration]);
+
+  useEffect(() => {
+    if (isScanning && closestBeaconRssi !== null) {
+      startProximityVibration(closestBeaconRssi);
+    } else {
+      stopProximityVibration();
+    }
+    return () => {
+      stopProximityVibration();
+    };
+  }, [isScanning, closestBeaconRssi, startProximityVibration, stopProximityVibration]);
 
   const handleDeviceDetected = async (device: Device) => {
     if (!isMountedRef.current || !isScanningRef.current) return;
@@ -186,39 +211,52 @@ export default function ScannerScreen() {
     if (!deviceName || device.rssi == null) return;
 
     const message = knownBeacons[deviceName];
-    if (!message) return;
+    if (message) {
+      const history = rssiHistoryRef.current[deviceName] || [];
+      history.push(device.rssi);
+      if (history.length > SMOOTHING_FACTOR) history.shift();
+      rssiHistoryRef.current[deviceName] = history;
 
-    const history = rssiHistoryRef.current[deviceName] || [];
-    history.push(device.rssi);
-    if (history.length > SMOOTHING_FACTOR) {
-      history.shift();
-    }
-    rssiHistoryRef.current[deviceName] = history;
+      if (history.length >= SMOOTHING_FACTOR) {
+        const currentRssi = history[history.length - 1];
+        const previousRssiAvg = history.slice(0, -1).reduce((acc, val) => acc + val, 0) / (history.length - 1);
+        const isApproaching = currentRssi > previousRssiAvg;
+        const isCloseEnough = currentRssi > RSSI_THRESHOLD;
 
-    if (history.length < SMOOTHING_FACTOR) return;
-
-    const currentRssi = history[history.length - 1];
-    const previousRssiAvg = history.slice(0, -1).reduce((acc, val) => acc + val, 0) / (history.length - 1);
-
-    const isApproaching = currentRssi > previousRssiAvg;
-    const isCloseEnough = currentRssi > RSSI_THRESHOLD;
-
-    if (isCloseEnough && isApproaching && !notifiedBeaconsRef.current.has(deviceName)) {
-      notifiedBeaconsRef.current.add(deviceName);
-
-      await triggerHapticFeedback(Haptics.ImpactFeedbackStyle.Heavy);
-      await speakMessage(message);
-
-      setTimeout(() => {
-        if (isMountedRef.current) {
-          notifiedBeaconsRef.current.delete(deviceName);
+        if (isCloseEnough && isApproaching && !notifiedBeaconsRef.current.has(deviceName)) {
+          notifiedBeaconsRef.current.add(deviceName);
+          await triggerHapticFeedback(Haptics.ImpactFeedbackStyle.Heavy);
+          await speakMessage(message);
+          setTimeout(() => {
+            if (isMountedRef.current) {
+              notifiedBeaconsRef.current.delete(deviceName);
+            }
+          }, ACTIVE_BEACON_TIMEOUT);
         }
-      }, ACTIVE_BEACON_TIMEOUT);
+      }
     }
-   
+
     setNearbyDevices(prev => {
-      const exists = prev.find(d => d.id === device.id);
-      return exists ? prev : [...prev.slice(-9), device];
+      const existingDeviceIndex = prev.findIndex(d => d.id === device.id);
+      let newDevices;
+
+      if (existingDeviceIndex > -1) {
+        newDevices = [...prev];
+        newDevices[existingDeviceIndex] = device;
+      } else {
+        newDevices = [...prev, device].slice(-10);
+      }
+
+      const closestDevice = newDevices
+        .filter(d => d.name && knownBeacons[d.name] && d.rssi != null)
+        .sort((a, b) => b.rssi! - a.rssi!)[0];
+
+      if (closestDevice && closestDevice.rssi) {
+        setClosestBeaconRssi(closestDevice.rssi);
+      } else {
+        setClosestBeaconRssi(null);
+      }
+      return newDevices;
     });
   };
 
@@ -230,7 +268,7 @@ export default function ScannerScreen() {
     try {
       const hasPermissions = await requestPermissionsFromService();
       if (!hasPermissions) {
-        Alert.alert('Erro', 'Permissões de Bluetooth são necessárias.');
+        // O alerta já é mostrado dentro do serviço de permissões
         return;
       }
 
@@ -250,7 +288,6 @@ export default function ScannerScreen() {
 
       setIsScanning(true);
       setNearbyDevices([]);
-
       notifiedBeaconsRef.current.clear();
       rssiHistoryRef.current = {};
 
@@ -268,7 +305,6 @@ export default function ScannerScreen() {
           handleDeviceDetected(device);
         }
       });
-
     } catch (error) {
       console.error('Erro ao iniciar escaneamento:', error);
       Alert.alert('Erro', 'Ocorreu um erro inesperado ao iniciar o escaneamento.');
@@ -278,7 +314,6 @@ export default function ScannerScreen() {
 
   const stopScanning = useCallback(async () => {
     if (!bleManagerRef.current) return;
-
     try {
       bleManagerRef.current.stopDeviceScan();
     } catch (error) {
@@ -287,6 +322,7 @@ export default function ScannerScreen() {
 
     if (isMountedRef.current) {
       setIsScanning(false);
+      setClosestBeaconRssi(null);
     }
 
     await triggerHapticFeedback(Haptics.ImpactFeedbackStyle.Medium);
