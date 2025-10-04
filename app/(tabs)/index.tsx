@@ -380,17 +380,6 @@ export default function ScannerScreen() {
           )}
         </TouchableOpacity>
 
-          // Dentro do seu return, talvez abaixo do botão principal:
-        <TouchableOpacity
-          style={{ backgroundColor: 'orange', padding: 20, borderRadius: 10, marginTop: 20 }}
-          onPress={() => {
-            console.log("TESTANDO VIBRAÇÃO...");
-            Vibration.vibrate(500); 
-          }}
-        >
-          <Text style={{ color: 'white' }}>Testar Vibração</Text>
-        </TouchableOpacity>
-
         {isScanning && (
           <View style={styles.statusContainer}>
             <Text style={styles.statusText}>Procurando...</Text>
