@@ -1,5 +1,10 @@
 import { Tabs } from 'expo-router';
-import { Chrome as Home, CircleHelp as HelpCircle, Settings } from 'lucide-react-native';
+import {
+  Chrome as Home,
+  CircleHelp as HelpCircle,
+  Settings,
+  FileText,
+} from 'lucide-react-native';
 
 export default function TabLayout() {
   return (
@@ -18,14 +23,13 @@ export default function TabLayout() {
           fontSize: 14,
           fontWeight: '600',
         },
-      }}>
+      }}
+    >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Scanner',
-          tabBarIcon: ({ size, color }) => (
-            <Home size={size} color={color} />
-          ),
+          tabBarIcon: ({ size, color }) => <Home size={size} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -43,6 +47,16 @@ export default function TabLayout() {
           title: 'Configurações',
           tabBarIcon: ({ size, color }) => (
             <Settings size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="termos"
+        options={{
+          title: 'Termos',
+          tabBarIcon: ({ size, color }) => (
+            <FileText size={size} color={color} />
           ),
         }}
       />
