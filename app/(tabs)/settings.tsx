@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
+  View,
+  Text,
+  StyleSheet,
   ScrollView,
   TouchableOpacity,
   Switch,
@@ -13,8 +13,6 @@ import Slider from '@react-native-community/slider';
 import * as Speech from 'expo-speech';
 import { Vibrate, TestTube } from 'lucide-react-native';
 import { getSettings, saveSettings, SettingsType } from '../../services/settings';
-// import { supabase } from '../../api/supabaseClient'; // <-- CORREÇÃO: Import desnecessário removido
-
 const DEFAULT_SETTINGS: SettingsType = {
   vibrationEnabled: true,
   speechRate: 0.5,
@@ -26,37 +24,29 @@ export default function SettingsScreen() {
   const [settings, setSettings] = useState<SettingsType>(DEFAULT_SETTINGS);
   const [isLoading, setIsLoading] = useState(true);
 
-  // useEffect corrigido para carregar apenas do AsyncStorage
   useEffect(() => {
     const loadInitialSettings = async () => {
       setIsLoading(true);
 
-      // <-- CORREÇÃO: Todo o bloco de login anônimo do Supabase foi removido
       
-      const loadedSettings = await getSettings(); // Carrega do AsyncStorage
+      const loadedSettings = await getSettings(); 
       setSettings(loadedSettings);
       setIsLoading(false);
     };
 
     loadInitialSettings();
-  }, []); // Roda apenas uma vez
-
-  // updateSetting corrigida para atualizar o estado
+  }, []); 
   const updateSetting = async (key: keyof SettingsType, value: any) => {
     const newSettings = { ...settings, [key]: value };
 
-    // <-- CORREÇÃO: Esta é a linha que faltava!
-    // Atualiza a UI (estado do React) imediatamente.
     setSettings(newSettings); 
 
-    // Salva no AsyncStorage em segundo plano
     const success = await saveSettings(newSettings);
     
     if (!success) {
-      // Se falhar, avisa o usuário e reverte o estado
       Alert.alert('Erro', 'Não foi possível salvar a configuração. Tente novamente.');
-      const oldSettings = await getSettings(); // Busca o último valor válido
-      setSettings(oldSettings); // Reverte a UI
+      const oldSettings = await getSettings(); 
+      setSettings(oldSettings); 
     }
   };
 
@@ -81,8 +71,8 @@ export default function SettingsScreen() {
           style: 'destructive',
           onPress: async () => {
             setIsLoading(true);
-            setSettings(DEFAULT_SETTINGS); // Atualiza a UI
-            await saveSettings(DEFAULT_SETTINGS); // Salva no storage
+            setSettings(DEFAULT_SETTINGS);
+            await saveSettings(DEFAULT_SETTINGS); 
             setIsLoading(false);
           },
         },
@@ -101,8 +91,6 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-        {/* ... O resto do seu JSX (layout) permanece o mesmo ... */}
-        {/* ... (Todo o JSX foi omitido para encurtar, mas ele está correto) ... */}
         <View style={styles.header}>
             <Text style={styles.title}>Configurações</Text>
             <Text style={styles.subtitle}>Personalize sua experiência</Text>
@@ -190,7 +178,6 @@ section             <View style={styles.infoContainer}>
 }
 
 const styles = StyleSheet.create({
-// ... (Seus estilos estão corretos e não foram alterados) ...
   container: {
     flex: 1,
     backgroundColor: '#1a1a1a',
