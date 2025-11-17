@@ -20,7 +20,8 @@ const ENVIRONMENTAL_FACTOR = 2.0;
 
 type BeaconInfo = {
     message: string;
-    rssi_threshold: number;
+    rssi_min: number;
+    rssi_max: number;
 };
 type BeaconMap = Record<string, BeaconInfo>;
 
@@ -54,17 +55,18 @@ export const useBeaconScanner = () => {
         setIsLoadingBeacons(true);
         const { data, error } = await supabase
             .from('beacons')
-            .select('name, message, rssi_threshold');
+            .select('name, message, rssi_min, rssi_max');
 
         if (error) {
             console.error('Erro ao buscar beacons:', error);
             Alert.alert('Erro de Conexão', 'Não foi possível carregar os dados dos beacons.');
         } else if (data) {
             const beaconMap = data.reduce((acc: BeaconMap, beacon) => {
-                if (beacon.name && beacon.message && beacon.rssi_threshold != null) {
+                if (beacon.name && beacon.message && beacon.rssi_min != null && beacon.rssi_max != null) {
                     acc[beacon.name] = {
                         message: beacon.message,
-                        rssi_threshold: beacon.rssi_threshold,
+                        rssi_min: beacon.rssi_min,
+                        rssi_max: beacon.rssi_max,
                     };
                 }
                 return acc;
@@ -171,14 +173,17 @@ export const useBeaconScanner = () => {
             return;
         }
 
-        const { message, rssi_threshold } = beaconInfo;
+        const { message, rssi_min, rssi_max } = beaconInfo;
         const currentRssi = device.rssi;
         const previousSmoothedRssi = smoothedRssiRef.current[deviceName] || currentRssi;
 
         const newSmoothedRssi = (EMA_ALPHA * currentRssi) + (1 - EMA_ALPHA) * previousSmoothedRssi;
         smoothedRssiRef.current[deviceName] = newSmoothedRssi;
 
-        if (newSmoothedRssi > rssi_threshold && !notifiedBeaconsRef.current.has(deviceName)) {
+        if (newSmoothedRssi > rssi_min &&
+            newSmoothedRssi < rssi_max &&
+            !notifiedBeaconsRef.current.has(deviceName)) {
+
             notifiedBeaconsRef.current.add(deviceName);
             triggerHapticFeedback(Haptics.ImpactFeedbackStyle.Heavy);
             speakMessage(message);
